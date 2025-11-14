@@ -1,0 +1,58 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str; // Digunakan untuk membuat booking code atau accessor
+
+class Booking extends Model
+{
+    use HasFactory;
+    /**
+     * The attributes that are mass assignable.
+     *
+     * @var array<int, string>
+     */
+
+    protected $fillable = [
+        'booking_code',
+        'user_id',
+        'bookable_id',
+        'bookable_type',
+        'start_date',
+        'end_date',
+        'quantity',
+        'unit_price_at_booking',
+        'total_price',
+        'notes',
+        'status',
+    ];
+
+    /**
+     * Mendapatkan user yang melakukan booking.
+     */
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Mendapatkan model parent (tour, activity, atau rental) dari booking ini.
+     */
+    public function bookable()
+    {
+        return $this->morphTo();
+    }
+    /**
+     * Accessor untuk mendapatkan tipe paket ('tour', 'activity', 'rental').
+     */
+    public function getPackageTypeAttribute()
+    {
+        if (!$this->bookable_type) {
+            return null;
+        }
+        $className = class_basename($this->bookable_type); // Misal: 'TourPackage'
+        return strtolower(str_replace('Package', '', $className)); // Menjadi 'tour'
+    }
+}
