@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ActivityPackage;
 use Illuminate\Http\Request;
 
 class ActivityPackageController extends Controller
@@ -11,7 +12,7 @@ class ActivityPackageController extends Controller
      */
     public function index()
     {
-        //
+        $packages = ActivityPackage::all()->paginate(2);
     }
 
     /**
