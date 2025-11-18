@@ -15,11 +15,14 @@ return new class extends Migration
             $table->id();
             $table->string('name');
             $table->string('email')->unique();
-            $table->boolean('email_verified')->nullable(0);
+            $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
             $table->enum('role', ['adminWeb', 'customer', 'owner', 'driver'])->default('customer');
             $table->string('phone_number', 25)->nullable();
-            $table->string('profile_picture', 255)->nullable();
+            $table->timestamp('phone_number_verified_at')->nullable(); //kapan dilakukannya verifikasi phone number
+            $table->text('address')->nullable();
+            $table->string('profile_picture')->nullable();
+            $table->text('fcm_token')->nullable(); //untuk user owner
             $table->rememberToken();
             $table->timestamps();
         });
