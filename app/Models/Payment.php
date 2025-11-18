@@ -21,6 +21,10 @@ class Payment extends Model
         'confirmed_by',
     ];
 
+    protected $casts = [
+        'confirmed_at' => 'datetime',
+    ];
+
     /**
      * Payment belongs to a booking
      */
@@ -30,9 +34,9 @@ class Payment extends Model
     }
 
     /**
-     * Payment is confirmed by 1 adminWeb (user)
+     * Payment is confirmed by 1 adminWeb (user) atau owner (user)
      */
-    public function admin()
+    public function confirmedBy()
     {
         return $this->belongsTo(User::class, 'confirmed_by');
     }

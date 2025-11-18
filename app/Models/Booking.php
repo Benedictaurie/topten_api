@@ -25,6 +25,8 @@ class Booking extends Model
         'quantity',
         'unit_price_at_booking',
         'total_price',
+        'reward_total_applied',
+        'final_price',
         'notes',
         'status',
     ];
@@ -54,5 +56,32 @@ class Booking extends Model
         }
         $className = class_basename($this->bookable_type); // Misal: 'TourPackage'
         return strtolower(str_replace('Package', '', $className)); // Menjadi 'tour'
+    }
+
+    /**
+     * Satu booking hanya dapat diberi satu review
+     */
+    public function review()
+    {
+        return $this->hasOne(Review::class);
+    }
+
+    /**
+     * Satu booking hanya memiliki satu pembayaran
+     */
+    public function payment()
+    {
+        return $this->hasOne(Payment::class);
+    }
+
+    /**
+     * Satu booking bisa menggunakan beberapa reward, dan satu reward bisa digunakan pada beberapa booking 
+     * (jika sistem memperbolehkan reward dipakai lebih dari satu kali — bisa juga tidak).
+     */
+    public function rewards()
+    {
+        return $this->belongsToMany(Reward::class, 'booking_rewards')
+            ->withPivot('applied_amount')
+            ->withTimestamps();
     }
 }

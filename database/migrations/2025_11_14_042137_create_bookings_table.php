@@ -24,7 +24,7 @@ return new class extends Migration
             $table->decimal('reward_total_applied', 10, 2)->default(0); 
             $table->decimal('final_price', 10, 2); // total_price - reward_total_applied
             $table->text('notes')->nullable();
-            $table->enum('status', ['pending', 'confirmed', 'cancelled'])->default('pending');
+            $table->enum('status', ['pending', 'confirmed', 'completed', 'cancelled', 'no_show', 'rescheduled'])->default('pending'); //no_show = User tidak muncul pada waktu booking tanpa pembatalan.
             $table->timestamps();
         });
     }
