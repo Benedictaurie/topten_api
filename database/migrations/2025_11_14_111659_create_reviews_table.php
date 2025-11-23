@@ -16,8 +16,8 @@ return new class extends Migration
             $table->foreignId('booking_id')->constrained('bookings')->cascadeOnUpdate()->cascadeOnDelete();;
             $table->foreignId('user_id')->constrained('users')->cascadeOnUpdate()->cascadeOnDelete();;
             $table->integer('rating');
-            $table->text('comment');
-            $table->string('image_url', 255)->nullable();
+            $table->text('comment')->nullable();
+            $table->string('image', 255)->nullable();
             $table->timestamps();
         });
     }

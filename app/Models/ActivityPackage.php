@@ -15,9 +15,14 @@ class ActivityPackage extends Model
         'price_per_person',
         'min_persons',
         'duration_hours',
-        'image_url',
         'is_available',
     ];
+
+    public function images()
+    {
+        // Mendefinisikan hubungan polimorfik Satu-ke-Banyak
+        return $this->morphMany(ImagePackage::class, 'imageable');
+    }
 
     public function bookings()
     {

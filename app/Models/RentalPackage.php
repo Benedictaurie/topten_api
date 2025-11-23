@@ -15,10 +15,15 @@ class RentalPackage extends Model
         'model',
         'plate_number',
         'description',
-        'image_url',
         'price_per_day',
         'is_available',
     ];
+
+    public function images()
+    {
+        // Mendefinisikan hubungan polimorfik Satu-ke-Banyak
+        return $this->morphMany(ImagePackage::class, 'imageable');
+    }
 
     public function bookings()
     {

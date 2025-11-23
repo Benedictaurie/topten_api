@@ -2,23 +2,23 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Resources\ApiResponseResources;
-use App\Models\ActivityPackage;
-// use App\Models\ImagePackage;
-use App\Services\Availability\ActivityAvailabilityService;
 use Illuminate\Http\Request;
+use App\Http\Resources\ApiResponseResources;
+use App\Models\TourPackage;
+// use App\Models\ImagePackage;
+use App\Services\Availability\TourAvailabilityService;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
 
-class ActivityPackageController extends Controller
-{
-    protected $activityAvailabilityService;
 
-    //Dependency Injection (Constructor) untuk memastikan bahwa service class diinisialisasi dan siap digunakan 
-    //melalui $this->activityAvailabilityService.
-    public function __construct(ActivityAvailabilityService $activityAvailabilityService)
+class TourPackageController extends Controller
+{
+    protected $tourAvailabilityService;
+
+    // 1. Dependency Injection di Constructor
+    public function __construct(TourAvailabilityService $tourAvailabilityService)
     {
-        $this->activityAvailabilityService = $activityAvailabilityService;
+        $this->tourAvailabilityService = $tourAvailabilityService;
     }
 
     /**
@@ -26,32 +26,34 @@ class ActivityPackageController extends Controller
      */
     public function index()
     {
-        $packages = ActivityPackage::where('is_available', true)->paginate(2);
+        $packages = TourPackage::where('is_available', true)->paginate(2);
         // Tambahkan 'images' agar muncul di listing
-        $packages->load('images');
-        return new ApiResponseResources(true, 'Activity packages retrieved successfully', $packages);
+        $packages->load('images'); 
+        return new ApiResponseResources(true, 'Tour packages retrieved successfully', $packages);
     }
 
-     /**
-     * Check availability for specific activity
+    /**
+     * Check availability for specific tour
      */
     public function checkAvailability(Request $request, $id)
     {
-        $request->validate([
-            'date' => 'required|date',
+        // Validasi: Perlu tanggal mulai dan jumlah peserta
+        $request->validate(rules: [
+            'start_date' => 'required|date',
             'participants' => 'required|integer|min:1'
         ]);
 
-        $isAvailable = $this->activityAvailabilityService->checkAvailability(
+        // Panggil Service Class
+        $isAvailable = $this->tourAvailabilityService->checkAvailability(
             $id,
-            $request->date,
+            $request->start_date,
             $request->participants
         );
 
         return new ApiResponseResources(true, 'Availability checked successfully', [
             'available' => $isAvailable,
-            'activity_id' => $id,
-            'date' => $request->date,
+            'tour_id' => $id,
+            'start_date' => $request->start_date,
             'participants' => $request->participants
         ]);
     }
@@ -59,18 +61,18 @@ class ActivityPackageController extends Controller
     /**
      * Store a newly created resource in storage.
      */
-     public function store(Request $request)
+    public function store(Request $request)
     {
         $messages =[
             'name.required' => 'Name is required',
             'name.max' => 'Name may not be greater than 255 characters!',
             'description.required' => 'Fill the description here',
-            'price_per_person.required' => 'Price is required',
+            'price_per_person.required' => 'Price per person is required',
             'price_per_person.numeric' => 'The price must be entered as a number',
             'min_persons.required' => 'Minimum number of people is required',
             'min_persons.numeric' => 'Minimum number of people must be entered as a number.',
-            'duration_hours.required' => 'Duration hours is required',
-            'duration_hours.numeric' => 'Duration hours must be entered as a number.',
+            'duration_days.required' => 'Duration hours is required',
+            'duration_days.numeric' => 'Duration hours must be entered as a number.',
             'image.array' => 'The image field must be an array.',
             'image.max' => 'You can only upload a maximum of :max images.',
             'image.*.image'=> 'The uploaded file must be an image (jpeg, png, jpg, gif, or svg).',
@@ -83,7 +85,7 @@ class ActivityPackageController extends Controller
             'description' => 'required',
             'price_per_person' => 'required|numeric',
             'min_persons' => 'required|numeric',
-            'duration_hours' => 'required|numeric',
+            'duration_days' => 'required|numeric', 
             'image' => 'nullable|array|max:6',
             'image.*' => 'image|mimes:jpeg,png,jpg,gif,svg|max:2048',
         ], $messages);
@@ -92,36 +94,30 @@ class ActivityPackageController extends Controller
             return new ApiResponseResources(false, $validator->errors(), null, 422);
         }
 
-        $activityPackage = ActivityPackage::create([
+        $tourPackage = TourPackage::create([
             'name' => $request->name,
             'description' => $request->description,
             'price_per_person' => $request->price_per_person,
             'min_persons' => $request->min_persons,
-            'duration_hours' => $request->duration_hours,
+            'duration_days' => $request->duration_days, 
             'is_available' => $request->is_available ?? true
         ]);
-        
-        // Simpan Gambar Menggunakan Relasi Polimorfik
+
+        // Simpan Gambar Menggunakan Relasi Polimorfik (sama seperti Activity)
         if ($request->hasFile("image")) {
             foreach ($request->file('image') as $imageFile) {
-                // Simpan file ke disk'
-                $path = $imageFile->store('packages/activity', 'public'); 
-
-                // MENGGUNAKAN RELASI POLYMORPHIC:
-                // Larik $activityPackage->images()->create() akan secara otomatis
-                // mengisi imageable_id dengan $activityPackage->id 
-                // dan imageable_type dengan 'App\Models\ActivityPackage'
-                $activityPackage->images()->create([
+                $path = $imageFile->store('packages/tour', 'public'); // Folder 'tour'
+                $tourPackage->images()->create([
                     'image' => $path,
                 ]);
             }
         }
 
-        if (!$activityPackage) {
-            return new ApiResponseResources(false, 'Failed to save Activity Package!', null, 500);
+        if (!$tourPackage) {
+            return new ApiResponseResources(false, 'Failed to save Tour Package!', null, 500);
         }
 
-        return new ApiResponseResources(true, 'Activity Package Saved Successfully!', $activityPackage->load('images'));
+        return new ApiResponseResources(true, 'Tour Package Saved Successfully!', $tourPackage->load('images'));
     }
 
     /**
@@ -129,14 +125,12 @@ class ActivityPackageController extends Controller
      */
     public function show(string $id)
     {
-        $activityPackage = ActivityPackage::find($id);
+        $tourPackage = TourPackage::find($id);
 
-        if (!$activityPackage) {
-            return new ApiResponseResources(false, 'Activity Package Not Found!', null, 404);
+        if (!$tourPackage) {
+            return new ApiResponseResources(false, 'Tour Package Not Found!', null, 404);
         }
-
-        //// menambahkan .load('images') jika ` ingin gambar muncul di respons GET tunggal
-        return new ApiResponseResources(true, 'Actvity Package Found!', $activityPackage->load('images'));
+        return new ApiResponseResources(true, 'Tour Package Found!', $tourPackage->load('images'));
     }
 
     /**
@@ -144,10 +138,10 @@ class ActivityPackageController extends Controller
      */
     public function update(Request $request, string $id)
     {
-        $activityPackage = ActivityPackage::find($id);
+        $tourPackage = TourPackage::find($id);
 
-        if (!$activityPackage) {
-            return new ApiResponseResources(false, 'Activity Package Not Found!', null, 404);
+        if (!$tourPackage) {
+            return new ApiResponseResources(false, 'Tour Package Not Found!', null, 404);
         }
 
         $messages =[
@@ -158,8 +152,8 @@ class ActivityPackageController extends Controller
             'price_per_person.numeric' => 'The price must be entered as a number',
             'min_persons.required' => 'Minimum number of people is required',
             'min_persons.numeric' => 'Minimum number of people must be entered as a number.',
-            'duration_hours.required' => 'Duration hours is required',
-            'duration_hours.numeric' => 'Duration hours must be entered as a number.',
+            'duration_days.required' => 'Duration hours is required',
+            'duration_days.numeric' => 'Duration hours must be entered as a number.',
             'image.array' => 'The image field must be an array.',
             'image.max' => 'You can only upload a maximum of :max images.',
             'image.*.image'=> 'The uploaded file must be an image (jpeg, png, jpg, gif, or svg).',
@@ -172,7 +166,7 @@ class ActivityPackageController extends Controller
             'description' => 'required',
             'price_per_person' => 'required|numeric',
             'min_persons' => 'required|numeric',
-            'duration_hours' => 'required|numeric',
+            'duration_days' => 'required|numeric', 
             'image' => 'nullable|array|max:6',
             'image.*' => 'image|mimes:jpeg,png,jpg,gif,svg|max:2048',
         ], $messages);
@@ -181,35 +175,30 @@ class ActivityPackageController extends Controller
             return new ApiResponseResources(false, $validator->errors(), null, 422);
         }
 
-        $activityPackage->update([
+        $tourPackage->update([
             'name' => $request->name,
             'description' => $request->description,
             'price_per_person' => $request->price_per_person,
             'min_persons' => $request->min_persons,
-            'duration_hours' => $request->duration_hours,
+            'duration_days' => $request->duration_days,
             'is_available' => $request->is_available ?? true
         ]);
 
-        //Perbarui Gambar Menggunakan Relasi Polimorfik
+        // Logika Gambar 
         if ($request->hasFile("image")) {
-            // Hapus gambar lama (dari storage dan database)
-            foreach ($activityPackage->images as $oldImage) {
+            foreach ($tourPackage->images as $oldImage) {
                 Storage::disk('public')->delete($oldImage->image);
-                $oldImage->delete(); // Hapus dari tabel image_packages
+                $oldImage->delete();
             }
-
-            // Simpan gambar baru
             foreach ($request->file('image') as $imageFile) {
-                $path = $imageFile->store('packages/activity', 'public');
-
-                // MENGGUNAKAN RELASI POLYMORPHIC
-                $activityPackage->images()->create([
-                    'image' => $path,
+                $path = $imageFile->store('packages/tour', 'public'); 
+                $tourPackage->images()->create([
+                    'image' => $path
                 ]);
             }
         }
 
-        return new ApiResponseResources(true, 'Activity Package Successfully Updated!', $activityPackage->load('images'));
+        return new ApiResponseResources(true, 'Tour Package Successfully Updated!', $tourPackage->load('images'));
     }
 
     /**
@@ -217,20 +206,20 @@ class ActivityPackageController extends Controller
      */
     public function delete(string $id)
     {
-        $activityPackage = ActivityPackage::find($id);
+        $tourPackage = TourPackage::find($id);
 
-        if (!$activityPackage) {
-            return new ApiResponseResources(false, 'Activity Package Not Found!', null, 404);
+        if (!$tourPackage) {
+            return new ApiResponseResources(false, 'Tour Package Not Found!', null, 404);
         }
 
-        // Hapus gambar dari storage dan database menggunakan relasi
-        foreach ($activityPackage->images as $image) {
+        // Hapus gambar dari storage dan database
+        foreach ($tourPackage->images as $image) {
             Storage::disk('public')->delete($image->image);
             $image->delete();
         }
 
-        $activityPackage->delete();
+        $tourPackage->delete();
 
-        return new ApiResponseResources(true, 'Activity Package Successfully Deleted!', Null, 200);
+        return new ApiResponseResources(true, 'Tour Package Successfully Deleted!', null, 200);
     }
 }

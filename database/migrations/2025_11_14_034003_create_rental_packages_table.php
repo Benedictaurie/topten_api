@@ -13,12 +13,12 @@ return new class extends Migration
     {
         Schema::create('rental_packages', function (Blueprint $table) {
             $table->id();
+            $table->string('name');
             $table->string('type', 50); // motor/mobil
             $table->string('brand', 50);
             $table->string('model', 50);
             $table->string('plate_number', 50)->unique();
-            $table->text('description')->nullable();
-            $table->string('image_url', 255)->nullable();
+            $table->text('description');
             $table->decimal('price_per_day', 10, 2);
             $table->boolean('is_available')->default(true);
             $table->timestamps();

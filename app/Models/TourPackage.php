@@ -15,9 +15,14 @@ class TourPackage extends Model
         'price_per_person',
         'min_persons',
         'duration_days',
-        'image_url',
         'is_available',
     ];
+
+    public function images()
+    {
+        // Mendefinisikan hubungan polimorfik Satu-ke-Banyak
+        return $this->morphMany(ImagePackage::class, 'imageable');
+    }
 
     public function bookings()
     {

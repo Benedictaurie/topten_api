@@ -17,7 +17,7 @@ return new class extends Migration
             $table->decimal('amount', 10, 2);
             $table->string('method', 30); // metode pembayaran
             $table->enum('status', ['unpaid','pending', 'paid', 'cancelled', 'refunded', 'failed'])->default('unpaid'); 
-            $table->string('proof_of_payment_path', 255)->nullable(); //menyimpan path file bukti transfer
+            $table->string('proof_of_payment', 255)->nullable(); //menyimpan file bukti transfer
             $table->timestamps();
             $table->timestamp('confirmed_at')->nullable()->useCurrent(); //konfirmasi hanya dilakukan jika pembayaran berhasil dan valid. jika tidak ada pembayaran (cancel/unpaid), kolom dibiarkan kosong
             $table->foreignId('confirmed_by')->nullable()->constrained('users')->nullOnDelete(); //karena kalau tidak ada konfirmasi, tidak ada admin yang perlu dicatat

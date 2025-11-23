@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Midtrans\Config;
 use Midtrans\Snap;
 use Midtrans\Notification;
+use App\Http\Resources\ApiResponseResources;
 
 class PaymentController extends Controller
 {
@@ -21,28 +22,47 @@ class PaymentController extends Controller
     }
 
     /**
-     * Mendapatkan Snap Token untuk pembayaran.
+     * Membuat pembayaran Midtrans untuk sebuah booking.
+     * @param int $paymentId
      */
-    public function getSnapToken(Request $request)
+    public function payBooking($paymentId)
     {
-        $booking = Booking::with('user')->findOrFail($request->booking_id);
+        $payment = Payment::with('booking.user')->findOrFail($paymentId);
 
         $payload = [
             'transaction_details' => [
-                'order_id' => $booking->booking_code,
-                'gross_amount' => $booking->total_price,
+                'order_id' => $payment->booking->booking_code,
+                'gross_amount' => $payment->amount,
             ],
             'customer_details' => [
-                'first_name' => $booking->user->name,
-                'email' => $booking->user->email,
+                'first_name' => $payment->booking->user->name,
+                'email' => $payment->booking->user->email,
+                'phone' => $payment->booking->user->phone_number,
             ],
+            'item_details' => [
+                [
+                    'id' => $payment->booking->bookable_id,
+                    'price' => $payment->booking->final_price,
+                    'quantity' => $payment->booking->quantity,
+                    'name' => $payment->booking->bookable->name,
+                ]
+            ]
         ];
 
         try {
             $snapToken = Snap::getSnapToken($payload);
-            return response()->json(['snap_token' => $snapToken]);
+            $paymentUrl = "https://app.sandbox.midtrans.com/snap/v2/vtweb/" . $snapToken;
+
+            // Update status payment ke 'pending'
+            $payment->update(['status' => 'pending']);
+
+            return new ApiResponseResources(true, 'Payment successfully created.', [
+                'snap_token' => $snapToken,
+                'payment_url' => $paymentUrl,
+            ], 200);
+
         } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            return new ApiResponseResources(false, 'Failed to create Midtrans payment: ' . $e->getMessage(), null, 500);
         }
     }
 
@@ -51,33 +71,31 @@ class PaymentController extends Controller
      */
     public function handleNotification(Request $request)
     {
-        $notif = new \Midtrans\Notification();
-        
+        $notif = new Notification($request);
         $transaction = $notif->transaction_status;
-        $order_id = $notif->order_id;
-        $fraud = $notif->fraud_status;
+        $orderId = $notif->order_id;
 
-        $payment = Payment::where('booking_code', $order_id)->first();
+        $payment = Payment::whereHas('booking', function ($query) use ($orderId) {
+            $query->where('booking_code', $orderId);
+        })->first();
 
         if ($payment) {
-            if ($transaction == 'capture') {
-                if ($fraud == 'challenge') {
-                    $payment->status = 'challenge';
-                } else if ($fraud == 'accept') {
-                    $payment->status = 'paid';
-                }
-            } else if ($transaction == 'settlement') {
-                $payment->status = 'paid';
-            } else if ($transaction == 'pending') {
-                $payment->status = 'pending';
-            } else if ($transaction == 'deny') {
-                $payment->status = 'cancelled';
-            } else if ($transaction == 'expire') {
-                $payment->status = 'cancelled';
-            } else if ($transaction == 'cancel') {
-                $payment->status = 'cancelled';
+            $newStatus = 'pending';
+            if ($transaction == 'capture' || $transaction == 'settlement') {
+                $newStatus = 'paid';
+            } elseif (in_array($transaction, ['deny', 'expire', 'cancel'])) {
+                $newStatus = 'cancelled';
             }
-            $payment->save();
+
+            if ($payment->status !== $newStatus) {
+                $payment->update([
+                    'status' => $newStatus,
+                    'confirmed_at' => $newStatus === 'paid' ? now() : null,
+                    'confirmed_by' => $newStatus === 'paid' ? 1 : null, // 1 untuk system user
+                ]);
+            }
         }
+
+        return response()->json(['status' => 'ok']);
     }
 }
