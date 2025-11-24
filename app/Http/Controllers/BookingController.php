@@ -223,6 +223,35 @@ class BookingController extends Controller
     }
 
     /**
+     * Menampilkan detail booking berdasarkan ID.
+     */
+    public function show($id)
+    {
+        // 1. Cari booking berdasarkan ID
+        $booking = Booking::with(['bookable', 'user', 'payment', 'rewards'])
+                          ->find($id);
+
+        if (!$booking) {
+            return new ApiResponseResources(false, 'Booking not found.', null, 404);
+        }
+
+        // 2. Otorisasi: Pastikan hanya user pembuat booking atau admin/owner yang bisa melihatnya.
+        // Asumsi: Jika role user adalah 'admin' atau 'owner', mereka bisa melihat semua booking.
+        $user = Auth::user();
+        $isAuthorized = $user && (
+            $booking->user_id === $user->id || 
+            in_array($user->role, ['admin', 'owner'])
+        );
+
+        if (!$isAuthorized) {
+            return new ApiResponseResources(false, 'Access denied. You do not have permission to view the details of this booking.', null, 403);
+        }
+
+        // 3. Kembalikan detail booking
+        return new ApiResponseResources(true, 'Booking details displayed successfully.', $booking);
+    }
+
+    /**
      * Menampilkan riwayat booking untuk user yang sedang login.
      */
     public function history()

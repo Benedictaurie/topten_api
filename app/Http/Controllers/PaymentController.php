@@ -9,6 +9,7 @@ use Midtrans\Config;
 use Midtrans\Snap;
 use Midtrans\Notification;
 use App\Http\Resources\ApiResponseResources;
+use App\Notifications\PaymentNotification;
 
 class PaymentController extends Controller
 {
@@ -16,7 +17,7 @@ class PaymentController extends Controller
     {
         // Set konfigurasi Midtrans
         Config::$serverKey = env('MIDTRANS_SERVER_KEY');
-        Config::$isProduction = env('MIDTRANS_IS_PRODUCTION', false);
+        Config::$isProduction = (bool) env('MIDTRANS_IS_PRODUCTION');
         Config::$isSanitized = true;
         Config::$is3ds = true;
     }
@@ -69,15 +70,16 @@ class PaymentController extends Controller
     /**
      * Handle notification dari Midtrans.
      */
-    public function handleNotification(Request $request)
+     public function handleNotification(Request $request)
     {
         $notif = new Notification($request);
         $transaction = $notif->transaction_status;
         $orderId = $notif->order_id;
 
+        // --- TAMBAHKAN WITH UNTUK MENGAMBIL DATA USER ---
         $payment = Payment::whereHas('booking', function ($query) use ($orderId) {
             $query->where('booking_code', $orderId);
-        })->first();
+        })->with('booking.user')->first(); // <-- Penting: Load data user
 
         if ($payment) {
             $newStatus = 'pending';
@@ -87,15 +89,20 @@ class PaymentController extends Controller
                 $newStatus = 'cancelled';
             }
 
+            // --- KIRIM NOTIFIKASI HANYA JIKA STATUS BERUBAH ---
             if ($payment->status !== $newStatus) {
                 $payment->update([
                     'status' => $newStatus,
                     'confirmed_at' => $newStatus === 'paid' ? now() : null,
                     'confirmed_by' => $newStatus === 'paid' ? 1 : null, // 1 untuk system user
                 ]);
+
+                // --- INTEGRASI NOTIFIKASI ---
+                // Kirim notifikasi ke user yang melakukan pembayaran
+                $payment->booking->user->notify(new PaymentNotification($payment));
             }
         }
 
-        return response()->json(['status' => 'ok']);
+        return response()->json(['status' => 'ok']); // Perbaiki typo 'status' -> 'ok'
     }
 }

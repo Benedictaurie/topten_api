@@ -3,11 +3,11 @@
 namespace App\Services\Notification;
 
 use Kreait\Firebase\Factory;
-// use Kreait\Firebase\Messaging\CloudMessage;
 use Kreait\Firebase\Messaging\Notification;
-// use Kreait\Firebase\Messaging\Target;
 use Illuminate\Support\Facades\Log;
 use Kreait\Firebase\Exception\MessagingException;
+
+//mengirim notifikasi push ke perangkat mobile (FCM).
 
 class FirebaseNotificationService
 {

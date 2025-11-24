@@ -3,17 +3,16 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
-
-use DateTime;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
-use SebastianBergmann\CodeCoverage\Driver\Driver;
+use Illuminate\Contracts\Auth\CanResetPassword as CanResetPasswordContract;
+use Illuminate\Auth\Passwords\CanResetPassword;
 
-class User extends Authenticatable
+class User extends Authenticatable implements CanResetPasswordContract
 {
-    use HasApiTokens, HasFactory, Notifiable;
+    use HasApiTokens, HasFactory, Notifiable, CanResetPassword;
 
     /**
      * The attributes that are mass assignable.
@@ -54,8 +53,8 @@ class User extends Authenticatable
     //memperlakukan data timestamp menjadi DateTime object di kode.
     protected $casts = [ 
         'email_verified_at' => 'datetime',  
-        'phone_number_verified_at' => 'datetime', 
-        'password' => 'hashed', //casting hash password
+        'phone_number_verified_at' => 'datetime',
+        'password' => 'hashed',
     ];
 
     //Relasi satu user hanya bisa punya punya satu driver record (untuk akun role = driver)
