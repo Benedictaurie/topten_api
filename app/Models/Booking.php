@@ -67,13 +67,23 @@ class Booking extends Model
     }
 
     /**
-     * Satu booking hanya memiliki satu pembayaran
+     * A Booking has many status logs.
      */
-    public function payment()
+    public function statusLogs()
     {
-        return $this->hasOne(Payment::class);
+        // Menggunakan Model BookingLog yang baru dibuat
+        return $this->hasMany(BookingLog::class); 
     }
 
+    /**
+     * A Booking has many payment transactions.
+     */
+    public function transactions()
+    {
+        // Menggunakan Model PaymentTransaction yang baru dibuat
+        return $this->hasMany(PaymentTransaction::class);
+    }
+    
     /**
      * Satu booking bisa menggunakan beberapa reward, dan satu reward bisa digunakan pada beberapa booking 
      * (jika sistem memperbolehkan reward dipakai lebih dari satu kali — bisa juga tidak).

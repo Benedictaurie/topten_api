@@ -71,7 +71,7 @@ class User extends Authenticatable implements CanResetPasswordContract
     //Relasi user (admin/owner) dapat mengonfirmasi banyak payments.
     public function confirmedPayments()
     {
-        return $this->hasMany(Payment::class, 'confirmed_by');
+        return $this->hasMany(PaymentTransaction::class, 'confirmed_by');
     }
     //satu user membuat banyak ulasan
     public function reviews()

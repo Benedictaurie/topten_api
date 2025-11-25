@@ -4,37 +4,42 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use App\Models\Booking;
-use App\Models\User;
 
-class Payment extends Model
+class PaymentTransaction extends Model
 {
     use HasFactory;
+
+    protected $table = 'payment_transactions';
 
     protected $fillable = [
         'booking_id',
         'amount',
+        'type',
         'method',
         'status',
-        'proof_of_payment_path',
+        'gateway_reference',
+        'proof_of_payment',
+        'raw_response',
         'confirmed_at',
         'confirmed_by',
+        'transacted_at',
     ];
 
     protected $casts = [
         'confirmed_at' => 'datetime',
+        'transacted_at' => 'datetime',
     ];
 
     /**
-     * Payment belongs to a booking
+     * Payment Transaction belongs to a Booking.
      */
     public function booking()
     {
-        return $this->belongsTo(Booking::class);
+        return $this->belongsTo(Booking::class, 'booking_id');
     }
 
     /**
-     * Payment is confirmed by 1 adminWeb (user) atau owner (user)
+     * Payment Transaction can be confirmed by a User/Admin.
      */
     public function confirmedBy()
     {
