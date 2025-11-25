@@ -3,13 +3,15 @@
 namespace App\Http\Controllers;
 
 use App\Models\Booking;
-use App\Models\Payment;
+use App\Models\PaymentTransaction;
+use App\Models\BookingLog;
 use Illuminate\Http\Request;
 use Midtrans\Config;
 use Midtrans\Snap;
 use Midtrans\Notification;
 use App\Http\Resources\ApiResponseResources;
-use App\Notifications\PaymentNotification;
+use App\Notifications\PaymentConfirmationNotification;
+use Illuminate\Support\Facades\Log;
 
 class PaymentController extends Controller
 {
@@ -24,28 +26,32 @@ class PaymentController extends Controller
 
     /**
      * Membuat pembayaran Midtrans untuk sebuah booking.
-     * @param int $paymentId
+     * @param int $transactionId
      */
-    public function payBooking($paymentId)
+    public function payBooking($transactionId)
     {
-        $payment = Payment::with('booking.user')->findOrFail($paymentId);
+        $transaction = PaymentTransaction::with('booking.user')->findOrFail($transactionId); 
+        $booking = $transaction->booking;
+
+        // Gunakan ID unik transaksi baru sebagai order_id Midtrans
+        $midtransOrderId = 'TRX-' . $transaction->id . '-' . $booking->booking_code;
 
         $payload = [
             'transaction_details' => [
-                'order_id' => $payment->booking->booking_code,
-                'gross_amount' => $payment->amount,
+                'order_id' => $midtransOrderId, // ID yang disepakati untuk Midtrans
+                'gross_amount' => $transaction->amount, // Ambil dari transaksi
             ],
             'customer_details' => [
-                'first_name' => $payment->booking->user->name,
-                'email' => $payment->booking->user->email,
-                'phone' => $payment->booking->user->phone_number,
+                'first_name' => $booking->user->name,
+                'email' => $booking->user->email,
+                'phone' => $booking->user->phone_number,
             ],
             'item_details' => [
                 [
-                    'id' => $payment->booking->bookable_id,
-                    'price' => $payment->booking->final_price,
-                    'quantity' => $payment->booking->quantity,
-                    'name' => $payment->booking->bookable->name,
+                    'id' => $booking->bookable_id,
+                    'price' => $booking->final_price,
+                    'quantity' => $booking->quantity,
+                    'name' => $booking->bookable->name,
                 ]
             ]
         ];
@@ -54,12 +60,16 @@ class PaymentController extends Controller
             $snapToken = Snap::getSnapToken($payload);
             $paymentUrl = "https://app.sandbox.midtrans.com/snap/v2/vtweb/" . $snapToken;
 
-            // Update status payment ke 'pending'
-            $payment->update(['status' => 'pending']);
+            // Update status transaksi: Set gateway reference dari order_id Midtrans
+            $transaction->update([
+                'status' => 'pending', 
+                'gateway_reference' => $midtransOrderId
+            ]);
 
             return new ApiResponseResources(true, 'Payment successfully created.', [
                 'snap_token' => $snapToken,
                 'payment_url' => $paymentUrl,
+                'transaction_id' => $transaction->id,
             ], 200);
 
         } catch (\Exception $e) {
@@ -70,39 +80,85 @@ class PaymentController extends Controller
     /**
      * Handle notification dari Midtrans.
      */
-     public function handleNotification(Request $request)
+    public function handleNotification(Request $request)
     {
-        $notif = new Notification($request);
-        $transaction = $notif->transaction_status;
-        $orderId = $notif->order_id;
+        // 1. Verifikasi Signature Key (Wajib untuk Keamanan!)
+        try {
+            $notif = new Notification();
+        } catch (\Exception $e) {
+            // Log error dan kembalikan 400 jika notif tidak valid
+            Log::error('Midtrans Notification Error: ' . $e->getMessage());
+            return response()->json(['message' => 'Invalid notification data'], 400);
+        }
+        
+        // Data utama dari notifikasi
+        $transactionStatus = $notif->transaction_status;
+        $paymentType = $notif->payment_type;
+        $midtransOrderId = $notif->order_id; // Ini adalah 'TRX-ID-BOOKINGCODE'
+        $fraudStatus = $notif->fraud_status;
 
-        // --- TAMBAHKAN WITH UNTUK MENGAMBIL DATA USER ---
-        $payment = Payment::whereHas('booking', function ($query) use ($orderId) {
-            $query->where('booking_code', $orderId);
-        })->with('booking.user')->first(); // <-- Penting: Load data user
+        // 2. Cari Payment Transaction berdasarkan Order ID Midtrans
+        $paymentTransaction = PaymentTransaction::where('gateway_reference', $midtransOrderId)
+                                                ->with('booking.user')
+                                                ->first();
 
-        if ($payment) {
-            $newStatus = 'pending';
-            if ($transaction == 'capture' || $transaction == 'settlement') {
-                $newStatus = 'paid';
-            } elseif (in_array($transaction, ['deny', 'expire', 'cancel'])) {
-                $newStatus = 'cancelled';
+        if (!$paymentTransaction) {
+            return response()->json(['message' => 'Payment Transaction not found for order_id: ' . $midtransOrderId], 404); 
+        }
+
+        $booking = $paymentTransaction->booking;
+        $oldPaymentStatus = $paymentTransaction->status;
+        $oldBookingStatus = $booking->status;
+
+        $newPaymentStatus = $oldPaymentStatus;
+        $newBookingStatus = $oldBookingStatus;
+        $systemUserId = 1; // Asumsi ID System/Admin
+
+        // 3. Logika Pembaruan Status
+        if ($transactionStatus == 'capture' || $transactionStatus == 'settlement') {
+            if ($fraudStatus == 'accept' || $transactionStatus == 'settlement') {
+                $newPaymentStatus = 'success'; // Ubah dari 'paid' menjadi 'success' sesuai enum PaymentTransaction
+                $newBookingStatus = 'confirmed';
             }
+        } elseif ($transactionStatus == 'pending') {
+            $newPaymentStatus = 'pending';
+        } elseif (in_array($transactionStatus, ['deny', 'expire', 'cancel'])) {
+            $newPaymentStatus = 'canceled';
+            $newBookingStatus = 'cancelled';
+        }
 
-            // --- KIRIM NOTIFIKASI HANYA JIKA STATUS BERUBAH ---
-            if ($payment->status !== $newStatus) {
-                $payment->update([
-                    'status' => $newStatus,
-                    'confirmed_at' => $newStatus === 'paid' ? now() : null,
-                    'confirmed_by' => $newStatus === 'paid' ? 1 : null, // 1 untuk system user
-                ]);
+        // 4. Lakukan Update Status Payment Transaction
+        if ($oldPaymentStatus !== $newPaymentStatus) {
+            $paymentTransaction->update([
+                'status' => $newPaymentStatus,
+                'method' => $paymentType, // Update metode pembayaran spesifik dari notifikasi
+                'confirmed_at' => ($newPaymentStatus === 'success' ? now() : null),
+                'confirmed_by' => ($newPaymentStatus === 'success' ? $systemUserId : null), 
+                'raw_response' => json_encode($notif->getResponse()), // Simpan raw response Midtrans
+            ]);
+        }
 
-                // --- INTEGRASI NOTIFIKASI ---
-                // Kirim notifikasi ke user yang melakukan pembayaran
-                $payment->booking->user->notify(new PaymentNotification($payment));
+        // 5. Update Status Booking dan Catat Log
+        if ($oldBookingStatus !== $newBookingStatus) {
+            // Update status Booking di tabel utama
+            $booking->update(['status' => $newBookingStatus]);
+            
+            // Catat perubahan status di BookingLog
+            BookingLog::create([
+                'booking_id' => $booking->id,
+                'user_id' => $systemUserId, // Sistem yang memicu perubahan karena callback
+                'old_status' => $oldBookingStatus,
+                'new_status' => $newBookingStatus,
+                'notes' => 'Status changed via Midtrans callback notification.',
+            ]);
+            
+            if ($newBookingStatus === 'confirmed') {
+                // Notification for User/Customer: Payment successful, Booking confirmed
+                $booking->user->notify(new PaymentConfirmationNotification($booking)); 
             }
         }
 
-        return response()->json(['status' => 'ok']); // Perbaiki typo 'status' -> 'ok'
+        // 6. Kembalikan Respons 200 OK ke Midtrans
+        return response()->json(['status' => 'ok'], 200);
     }
 }

@@ -7,7 +7,8 @@ use App\Models\ActivityPackage;
 use App\Models\RentalPackage;
 use App\Models\Booking;
 use App\Models\User;
-use App\Models\Payment;
+use App\Models\PaymentTransaction;
+use App\Models\BookingLog;
 use App\Http\Controllers\PaymentController;
 use App\Notifications\NewBookingNotification; 
 use App\Services\Notification\FirebaseNotificationService;
@@ -161,11 +162,25 @@ class BookingController extends Controller
                     BookingReward::insert($pivotData);
                 }
 
-                // --- BUAT RECORD PEMBAYARAN ---
-                $payment = Payment::create([
+                // --- 1. BUAT BOOKING LOG AWAL ('pending') ---
+                BookingLog::create([
+                    'booking_id' => $booking->id,
+                    'user_id' => auth()->id(), // User yang membuat log
+                    'old_status' => null,
+                    'new_status' => 'pending',
+                    'notes' => 'Initial booking creation.',
+                ]);
+
+                // --- 2. BUAT RECORD PAYMENT TRANSACTION AWAL ---
+                // Transaksi Midtrans selalu dimulai dengan status 'pending' atau 'unpaid'.
+                // Kita gunakan 'pending' di sini untuk mewakili upaya pembayaran yang akan datang.
+                $transaction = PaymentTransaction::create([
                     'booking_id' => $booking->id,
                     'amount' => $finalPrice,
-                    'status' => 'unpaid', // Status awal
+                    'type' => 'Payment', // Tipe pembayaran utama
+                    'status' => 'pending', // Status awal, sebelum Midtrans dipanggil
+                    'method' => 'Midtrans/Snap', // Metode pembayaran yang dituju
+                    // Kolom lain seperti gateway_reference, confirmed_at, dll. akan diisi di PaymentController atau Callback
                 ]);
 
                 // --- KIRIM NOTIFIKASI KE OWNER ---
@@ -177,30 +192,32 @@ class BookingController extends Controller
                             $firebaseService = app(FirebaseNotificationService::class);
                             $firebaseService->sendToDevice(
                                 $owner->fcm_token,
-                                'Booking Baru!',
-                                'Ada pesanan baru untuk ' . $booking->bookable->name,
+                                'New Booking!',
+                                'There is a new order for ' . $booking->bookable->name,
                                 ['booking_code' => $booking->booking_code]
                             );
                         }
                     }
                 }
 
-                return ['booking' => $booking, 'payment' => $payment];
+                return ['booking' => $booking, 'transaction' => $transaction];
             });
 
             // --- INTEGRASI MIDTRANS ---
             $paymentController = new PaymentController();
-            $paymentResponse = $paymentController->payBooking($bookingData['payment']->id);
-            $paymentData = $paymentResponse->original; // Ambil data asli dari resource
+            // Panggil payBooking dengan ID PaymentTransaction yang baru
+            $paymentResponse = $paymentController->payBooking($bookingData['transaction']->id); 
+            $paymentData = $paymentResponse->original; 
 
             // --- RETURN RESPONSE JSON ---
-            return new ApiResponseResources(true, 'Booking berhasil! Silakan lanjutkan ke pembayaran.', [
+            return new ApiResponseResources(true, 'Booking successful! Please proceed to payment.', [
                 'booking' => $bookingData['booking']->load('bookable', 'rewards'),
-                'payment' => $paymentData['data'], // Data dari PaymentController
+                // Ganti 'payment' menjadi 'transaction'
+                'transaction' => $paymentData['data'], 
             ], 201);
 
         } catch (\Exception $e) {
-            return new ApiResponseResources(false, 'Gagal membuat booking: ' . $e->getMessage(), null, 500);
+            return new ApiResponseResources(false, 'Failed to create booking ' . $e->getMessage(), null, 500);
         }
     }
 
@@ -228,8 +245,8 @@ class BookingController extends Controller
     public function show($id)
     {
         // 1. Cari booking berdasarkan ID
-        $booking = Booking::with(['bookable', 'user', 'payment', 'rewards'])
-                          ->find($id);
+        $booking = Booking::with(['bookable', 'user', 'transactions', 'statusLogs', 'rewards']) 
+                             ->find($id);
 
         if (!$booking) {
             return new ApiResponseResources(false, 'Booking not found.', null, 404);
@@ -257,7 +274,7 @@ class BookingController extends Controller
     public function history()
     {
         $bookings = Booking::where('user_id', auth()->id())
-                            ->with('bookable')
+                            ->with(['bookable', 'transactions', 'rewards']) // <<< Tambahkan relasi lain jika diperlukan
                             ->latest()
                             ->paginate(10);
 
