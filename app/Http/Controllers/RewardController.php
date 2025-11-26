@@ -148,4 +148,138 @@ class RewardController extends Controller
 
         return new ApiResponseResources(true, 'Reward history retrieved successfully', $rewards);
     }
+
+    /**
+     * ADMIN: Get all rewards with filters
+     */
+    public function adminIndex(Request $request)
+    {
+        try {
+            $perPage = $request->get('per_page', 15);
+            $status = $request->get('status');
+            $origin = $request->get('origin');
+            $userId = $request->get('user_id');
+
+            $query = Reward::with(['user'])
+                ->orderBy('created_at', 'desc');
+
+            if ($status) {
+                $query->where('status', $status);
+            }
+
+            if ($origin) {
+                $query->where('origin', $origin);
+            }
+
+            if ($userId) {
+                $query->where('user_id', $userId);
+            }
+
+            $rewards = $query->paginate($perPage);
+
+            return new ApiResponseResources(true, 'Admin rewards retrieved successfully', $rewards);
+
+        } catch (\Exception $e) {
+            \Log::error('Admin rewards retrieval failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Failed to retrieve rewards', null, 500);
+        }
+    }
+
+    /**
+     * ADMIN: Create new reward for user
+     */
+    public function adminStore(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'user_id' => 'required|exists:users,id',
+            'amount' => 'required|numeric|min:0',
+            'origin' => 'required|in:welcome,promotion,referral,manual',
+            'expired_at' => 'required|date|after:today',
+            'min_transaction' => 'nullable|numeric|min:0',
+            'applies_to' => 'nullable|in:all,tour,activity,rental',
+        ]);
+
+        if ($validator->fails()) {
+            return new ApiResponseResources(false, $validator->errors(), null, 422);
+        }
+
+        try {
+            $reward = Reward::create([
+                'user_id' => $request->user_id,
+                'amount' => $request->amount,
+                'origin' => $request->origin,
+                'status' => 'available',
+                'expired_at' => $request->expired_at,
+                'min_transaction' => $request->min_transaction,
+                'applies_to' => $request->applies_to ?? 'all',
+            ]);
+
+            $reward->load('user');
+
+            return new ApiResponseResources(true, 'Reward created successfully', $reward, 201);
+
+        } catch (\Exception $e) {
+            \Log::error('Admin reward creation failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Failed to create reward', null, 500);
+        }
+    }
+
+    /**
+     * ADMIN: Update reward
+     */
+    public function adminUpdate(Request $request, $id)
+    {
+        $validator = Validator::make($request->all(), [
+            'amount' => 'nullable|numeric|min:0',
+            'status' => 'nullable|in:available,used,expired',
+            'expired_at' => 'nullable|date|after:today',
+            'min_transaction' => 'nullable|numeric|min:0',
+        ]);
+
+        if ($validator->fails()) {
+            return new ApiResponseResources(false, $validator->errors(), null, 422);
+        }
+
+        try {
+            $reward = Reward::find($id);
+            
+            if (!$reward) {
+                return new ApiResponseResources(false, 'Reward not found', null, 404);
+            }
+
+            $reward->update($request->only(['amount', 'status', 'expired_at', 'min_transaction']));
+            $reward->load('user');
+
+            return new ApiResponseResources(true, 'Reward updated successfully', $reward);
+
+        } catch (\Exception $e) {
+            \Log::error('Admin reward update failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Failed to update reward', null, 500);
+        }
+    }
+
+    /**
+     * ADMIN: Get reward statistics
+     */
+    public function adminStats()
+    {
+        try {
+            $stats = [
+                'total_rewards' => Reward::count(),
+                'available_rewards' => Reward::where('status', 'available')->count(),
+                'used_rewards' => Reward::where('status', 'used')->count(),
+                'expired_rewards' => Reward::where('status', 'expired')->count(),
+                'total_discount_given' => Reward::where('status', 'used')->sum('amount'),
+                'origin_distribution' => Reward::selectRaw('origin, count(*) as count')
+                    ->groupBy('origin')
+                    ->get()
+            ];
+
+            return new ApiResponseResources(true, 'Reward statistics retrieved', $stats);
+
+        } catch (\Exception $e) {
+            \Log::error('Admin reward stats failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Failed to retrieve reward statistics', null, 500);
+        }
+    }
 }

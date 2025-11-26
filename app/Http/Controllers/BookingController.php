@@ -21,6 +21,7 @@ use App\Models\BookingReward;
 use App\Models\Reward;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon; // Tambahkan ini untuk manipulasi tanggal
+use Illuminate\Support\Facades\Log;
 
 class BookingController extends Controller
 {
@@ -221,6 +222,42 @@ class BookingController extends Controller
         }
     }
 
+    public function cancel($id)
+    {
+        try {
+            $user = Auth::user();
+            $booking = Booking::where('id', $id)
+                ->where('user_id', $user->id)
+                ->first();
+
+            if (!$booking) {
+                return new ApiResponseResources(false, 'Booking not found', null, 404);
+            }
+
+            // Only allow cancellation for pending bookings
+            if ($booking->status !== 'pending') {
+                return new ApiResponseResources(false, 'Only pending bookings can be cancelled', null, 422);
+            }
+
+            $booking->update(['status' => 'cancelled']);
+
+            // Log the cancellation
+            BookingLog::create([
+                'booking_id' => $booking->id,
+                'user_id' => $user->id,
+                'old_status' => 'pending',
+                'new_status' => 'cancelled',
+                'notes' => 'Booking cancelled by user',
+            ]);
+
+            return new ApiResponseResources(true, 'Booking cancelled successfully', $booking);
+
+        } catch (\Exception $e) {
+            Log::error('Booking cancellation failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Failed to cancel booking', null, 500);
+        }
+    }
+
     /**
      * Menampilkan halaman sukses setelah booking.
      */
@@ -266,6 +303,23 @@ class BookingController extends Controller
 
         // 3. Kembalikan detail booking
         return new ApiResponseResources(true, 'Booking details displayed successfully.', $booking);
+    }
+
+    public function myBookings()
+    {
+        try {
+            $user = Auth::user();
+            $bookings = Booking::where('user_id', $user->id)
+                ->with(['bookable', 'transactions', 'rewards'])
+                ->orderBy('created_at', 'desc')
+                ->paginate(10);
+
+            return new ApiResponseResources(true, 'Your bookings retrieved successfully', $bookings);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to retrieve user bookings: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Failed to retrieve your bookings', null, 500);
+        }
     }
 
     /**
