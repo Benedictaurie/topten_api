@@ -237,12 +237,10 @@ class AuthController extends Controller
     }
 
     /**
-     * [API Endpoint] Menangani permintaan Lupa Kata Sandi (Forgot Password).
-     * Mengirim link reset (dengan token) ke email pengguna.
-     * * @param Request $request [email]
-     * @return ApiResponseResources
+     * [API Endpoint] Request password reset link (Forgot Password)
+     * Endpoint: POST /api/forgot-password
      */
-    public function forgetPassword(Request $request)
+    public function forgotPassword(Request $request)
     {
         $messages = [
             'email.required' => 'The email field is required!',
@@ -268,11 +266,13 @@ class AuthController extends Controller
 
         // 3. Simpan token ke database (dengan created_at untuk kedaluwarsa)
         try {
-             DB::table('password_reset_tokens')->updateOrInsert(
+             DB::table('temp_tokens')->updateOrInsert(
                 ['email' => $user->email],
                 [
                     'token' => $hashedToken,
-                    'created_at' => Carbon::now()
+                    'expired_at' => Carbon::now()->addMinutes($this->tokenLifetime),
+                    'created_at' => Carbon::now(),
+                    'updated_at' => now()
                 ],
             );
         } catch (\Exception $e) {
@@ -293,13 +293,11 @@ class AuthController extends Controller
         return new ApiResponseResources(true, 'A password reset link has been sent to your email.');
     }
 
-    /**
-     * [API Endpoint] Menangani perubahan kata sandi setelah pengguna menekan link reset.
-     * Memeriksa token, mengubah kata sandi, dan menghapus token.
-     * * @param Request $request [token, email, password, confirmPassword]
-     * @return ApiResponseResources
+    /*/**
+     * [API Endpoint] Reset password with token (from email link)
+     * Endpoint: POST /api/reset-password
      */
-    public function changePassword(Request $request)
+    public function resetPassword(Request $request)
     {
         // Catatan: Karena ini adalah API endpoint, Anda mungkin perlu menerima email juga dari client.
         $messages = [
@@ -323,7 +321,7 @@ class AuthController extends Controller
         }
 
         // 1. Cari token di database
-        $reset = DB::table('password_reset_tokens')
+        $reset = DB::table('temp_tokens')
                     ->where('email', $request->email)
                     ->first();
 
@@ -337,14 +335,13 @@ class AuthController extends Controller
         }
 
         // 3. Periksa Kedaluwarsa Token (60 menit)
-        $expirationTime = Carbon::parse($reset->created_at)->addMinutes($this->tokenLifetime);
-        if (Carbon::now()->greaterThan($expirationTime)) {
-             // Hapus token yang kedaluwarsa
-            DB::table('password_reset_tokens')->where('email', $request->email)->delete();
-            return new ApiResponseResources(false, 'Password reset token has expired', null, 400);
+        if (Carbon::now()->gt(Carbon::parse($reset->expired_at))) {
+            // Delete expired token
+            DB::table('temp_tokens')->where('email', $request->email)->delete();
+            return new ApiResponseResources(false, 'Password reset token has expired.', null, 400);
         }
 
-        // 4. Update Kata Sandi
+        // 4. Update password
         $user = User::where('email', $reset->email)->first();
         if (!$user) {
             return new ApiResponseResources(false, 'User not found', null, 404);
@@ -354,8 +351,53 @@ class AuthController extends Controller
         $user->update(['password' => Hash::make($request->password)]);
 
         // 5. Hapus Token Reset
-        DB::table('password_reset_tokens')->where('email', $reset->email)->delete();
+        DB::table('temp_tokens')->where('email', $reset->email)->delete();
 
         return new ApiResponseResources(true, 'Password updated successfully. You can now log in.');
+    }
+
+    public function updatePassword(Request $request)
+    {
+        $messages = [
+            'current_password.required' => 'Current password is required',
+            'password.required' => 'New password is required',
+            'password.confirmed' => 'Password confirmation does not match',
+            'password.min' => 'Password must be at least 8 characters',
+        ];
+
+        $validator = Validator::make($request->all(), [
+            'current_password' => 'required',
+            'password' => 'required|confirmed|min:8',
+        ], $messages);
+
+        if ($validator->fails()) {
+            return new ApiResponseResources(false, $validator->errors(), null, 422);
+        }
+
+        $user = Auth::user();
+
+        if (!Hash::check($request->current_password, $user->password)) {
+            return new ApiResponseResources(false, 'The current password is incorrect.', null, 400);
+        }
+
+        try {
+            // Update password
+            $user->password = Hash::make($request->password);
+            $user->save();
+
+            // Send confirmation email (optional)
+            try {
+                // You can create a different email template for profile password change
+                Mail::to($user->email)->send(new PasswordChangedMail($user, 'profile_change'));
+            } catch (\Exception $e) {
+                Log::error('Failed to send password change notification: ' . $e->getMessage());
+            }
+
+            return new ApiResponseResources(true, 'Password changed successfully.', null, 200);
+
+        } catch (\Exception $e) {
+            Log::error('Password change failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Password change failed.', null, 500);
+        }
     }
 }
