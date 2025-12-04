@@ -12,21 +12,23 @@ use Midtrans\Notification;
 use App\Http\Resources\ApiResponseResources;
 use App\Models\User;
 use App\Notifications\PaymentConfirmationNotification;
+use App\Services\Notification\FirebaseNotificationService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 
 class PaymentController extends Controller
 {
-    public function __construct()
-    {
-        // Set konfigurasi Midtrans
-        Config::$serverKey = env('MIDTRANS_SERVER_KEY');
-        Config::$isProduction = (bool) env('MIDTRANS_IS_PRODUCTION');
-        Config::$isSanitized = true;
-        Config::$is3ds = true;
-    }
+    // public function __construct()
+    // {
+    //     // Set konfigurasi Midtrans
+    //     Config::$serverKey = env('MIDTRANS_SERVER_KEY');
+    //     Config::$isProduction = (bool) env('MIDTRANS_IS_PRODUCTION');
+    //     Config::$isSanitized = true;
+    //     Config::$is3ds = true;
+    // }
 
      /**
      * Get payment details for a booking (Customer)
@@ -45,14 +47,22 @@ class PaymentController extends Controller
                 return new ApiResponseResources(false, 'Booking not found', null, 404);
             }
 
-            $latestTransaction = $booking->transactions()
-                ->orderBy('created_at', 'desc')
-                ->first();
+            $transactions = $booking->transactions()->orderBy('created_at', 'desc')->get();
+            
+            // Hitung total pembayaran yang berhasil
+            $totalPaid = $transactions->where('status', 'success')->sum('amount');
+            $remaining = max(0, $booking->final_price - $totalPaid);
+            $isFullyPaid = $remaining <= 0;
 
             return new ApiResponseResources(true, 'Payment details retrieved', [
                 'booking' => $booking,
-                'payment_transaction' => $latestTransaction,
-                'payment_status' => $latestTransaction->status ?? 'pending'
+                'transactions' => $transactions,
+                'payment_summary' => [
+                    'total_amount' => $booking->final_price,
+                    'total_paid' => $totalPaid,
+                    'remaining' => $remaining,
+                    'is_fully_paid' => $isFullyPaid,
+                ]
             ]);
 
         } catch (\Exception $e) {
@@ -60,46 +70,7 @@ class PaymentController extends Controller
             return new ApiResponseResources(false, 'Failed to retrieve payment details', null, 500);
         }
     }
-
-    /**
-     * Retry payment for a transaction (Customer)
-     */
-    public function retryPayment($transactionId)
-    {
-        try {
-            $user = Auth::user();
-            
-            $transaction = PaymentTransaction::with(['booking'])
-                ->where('id', $transactionId)
-                ->whereHas('booking', function($query) use ($user) {
-                    $query->where('user_id', $user->id);
-                })
-                ->first();
-
-            if (!$transaction) {
-                return new ApiResponseResources(false, 'Transaction not found', null, 404);
-            }
-
-            // Hanya status yang bisa di-retry
-            $retryableStatuses = ['pending', 'failed', 'canceled'];
-            if (!in_array($transaction->status, $retryableStatuses)) {
-                return new ApiResponseResources(
-                    false, 
-                    'Cannot retry payment for current status: ' . $transaction->status, 
-                    null, 
-                    422
-                );
-            }
-
-            // Call the existing payBooking method
-            return $this->payBooking($transactionId);
-
-        } catch (\Exception $e) {
-            Log::error('Retry payment failed: ' . $e->getMessage());
-            return new ApiResponseResources(false, 'Failed to retry payment', null, 500);
-        }
-    }
-
+    
     /**
      * Get user's payment history (Customer)
      */
@@ -109,7 +80,7 @@ class PaymentController extends Controller
             $user = Auth::user();
             $perPage = $request->get('per_page', 10);
             
-            $transactions = PaymentTransaction::with(['booking.bookable'])
+            $transactions = PaymentTransaction::with(['booking.bookable', 'booking'])
                 ->whereHas('booking', function($query) use ($user) {
                     $query->where('user_id', $user->id);
                 })
@@ -124,210 +95,214 @@ class PaymentController extends Controller
         }
     }
 
-
     /**
-     * Membuat pembayaran Midtrans untuk sebuah booking.
-     * @param int $transactionId
+     * Customer: Upload proof of payment
      */
-    public function payBooking($transactionId)
+    public function uploadProof(Request $request, $bookingId)
     {
         try {
-            $transaction = PaymentTransaction::with('booking.user')->findOrFail($transactionId); 
-            $booking = $transaction->booking;
+            $validator = Validator::make($request->all(), [
+                'proof_file' => 'required|file|mimes:jpg,jpeg,png,pdf|max:5120',
+                'payment_method' => 'required|in:cash,transfer,other',
+                'amount' => 'required|numeric|min:1',
+                'notes' => 'nullable|string|max:500',
+            ]);
 
-            //Validasi status booking
-            if (!in_array($booking->status, ['pending', 'confirmed'])) {
+            if ($validator->fails()) {
+                return new ApiResponseResources(false, $validator->errors(), null, 422);
+            }
+
+            $user = Auth::user();
+            $booking = Booking::where('id', $bookingId)
+                ->where('user_id', $user->id)
+                ->first();
+
+            if (!$booking) {
+                return new ApiResponseResources(false, 'Booking not found', null, 404);
+            }
+
+            // Validasi amount tidak melebihi sisa pembayaran
+            $totalPaid = $booking->transactions()->where('status', 'success')->sum('amount');
+            $remaining = max(0, $booking->final_price - $totalPaid);
+            
+            if ($request->amount > $remaining) {
                 return new ApiResponseResources(
                     false, 
-                    'Cannot process payment for booking with status: ' . $booking->status, 
+                    'Payment amount exceeds remaining balance. Remaining: ' . number_format($remaining), 
                     null, 
                     422
                 );
             }
 
-            // Gunakan ID unik transaksi baru sebagai order_id Midtrans
-            $midtransOrderId = 'TRX-' . $transaction->id . '-' . $booking->booking_code . '-' . time();
+            // Upload file
+            $file = $request->file('proof_file');
+            $path = $file->store('payment-proofs', 'public');
 
-            $payload = [
-                'transaction_details' => [
-                    'order_id' => $midtransOrderId,
-                    'gross_amount' => $transaction->amount,
-                ],
-                'customer_details' => [
-                    'first_name' => $booking->user->name,
-                    'email' => $booking->user->email,
-                    'phone' => $booking->user->phone_number ?? '',
-                ],
-                'item_details' => [
-                    [
-                        'id' => $booking->bookable_id,
-                        'price' => $booking->final_price,
-                        'quantity' => $booking->quantity,
-                        'name' => $booking->bookable->name,
-                    ]
-                ],
-                'callbacks' => [
-                    'finish' => env('APP_URL') . '/payment/success',
-                    'error' => env('APP_URL') . '/payment/error',
-                    'pending' => env('APP_URL') . '/payment/pending'
-                ]
-            ];
+            return DB::transaction(function () use ($booking, $request, $path, $user) {
+                // Buat payment transaction
+                $transaction = PaymentTransaction::create([
+                    'booking_id' => $booking->id,
+                    'type' => 'Payment',
+                    'amount' => $request->amount,
+                    'method' => $request->payment_method,
+                    'status' => 'pending', // Menunggu konfirmasi admin
+                    'proof_of_payment' => $path,
+                    'transacted_at' => now(),
+                ]);
 
-            $snapToken = Snap::getSnapToken($payload);
-            $paymentUrl = "https://app.sandbox.midtrans.com/snap/v2/vtweb/" . $snapToken;
+                // Update booking status jika sebelumnya pending
+                if ($booking->status === 'pending') {
+                    $booking->update(['status' => 'pending_payment']);
+                    
+                    BookingLog::create([
+                        'booking_id' => $booking->id,
+                        'user_id' => $user->id,
+                        'old_status' => 'pending',
+                        'new_status' => 'pending_payment',
+                        'notes' => 'Proof of payment uploaded. Waiting for admin confirmation.',
+                    ]);
+                }
 
-            // Update status transaksi
-            $transaction->update([
-                'status' => 'pending', 
-                'gateway_reference' => $midtransOrderId,
-                'raw_response' => json_encode($payload)
-            ]);
+                // Notify admin
+                $admins = User::whereIn('role', ['admin', 'owner'])->get();
+                foreach ($admins as $admin) {
+                    if ($admin->fcm_token) {
+                        $firebaseService = app(FirebaseNotificationService::class);
+                        $firebaseService->sendToDevice(
+                            $admin->fcm_token,
+                            'New Payment Proof!',
+                            'Customer uploaded payment proof for booking #' . $booking->booking_code,
+                            [
+                                'booking_id' => $booking->id,
+                                'transaction_id' => $transaction->id,
+                                'type' => 'payment_proof_uploaded'
+                            ]
+                        );
+                    }
+                }
 
-            return new ApiResponseResources(true, 'Payment successfully created.', [
-                'snap_token' => $snapToken,
-                'payment_url' => $paymentUrl,
-                'transaction_id' => $transaction->id,
-                'order_id' => $midtransOrderId
-            ], 200);
+                return new ApiResponseResources(true, 'Proof of payment uploaded successfully. Waiting for admin confirmation.', [
+                    'transaction' => $transaction,
+                    'proof_url' => Storage::url($path),
+                    'booking' => $booking->fresh(),
+                ]);
+
+            });
 
         } catch (\Exception $e) {
-            Log::error('Pay booking failed - Transaction ID: ' . $transactionId . ' - Error: ' . $e->getMessage());
-            return new ApiResponseResources(false, 'Failed to create payment: ' . $e->getMessage(), null, 500);
+            Log::error('Proof upload failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Failed to upload proof', null, 500);
         }
     }
 
     /**
-     * Handle notification dari Midtrans.
+     * ADMIN/OWNER: Get bookings pending confirmation
+     * GET /management/bookings/pending-confirmations
      */
-    /**
-     * Handle notification dari Midtrans.
-     */
-    public function handleNotification(Request $request)
+    public function getPendingConfirmations(Request $request)
     {
         try {
-            $notif = new Notification();
-        } catch (\Exception $e) {
-            Log::error('Midtrans Notification Error: ' . $e->getMessage());
-            return response()->json(['message' => 'Invalid notification data'], 400);
-        }
-        
-        $transactionStatus = $notif->transaction_status;
-        $paymentType = $notif->payment_type;
-        $midtransOrderId = $notif->order_id;
-        $fraudStatus = $notif->fraud_status;
-
-        Log::info('Midtrans Notification Received', [
-            'order_id' => $midtransOrderId,
-            'status' => $transactionStatus,
-            'payment_type' => $paymentType,
-            'fraud_status' => $fraudStatus
-        ]);
-
-        //Gunakan transaction untuk consistency
-        return DB::transaction(function () use ($notif, $transactionStatus, $paymentType, $midtransOrderId, $fraudStatus) {
+            $perPage = $request->get('per_page', 15);
             
-            $paymentTransaction = PaymentTransaction::where('gateway_reference', $midtransOrderId)
-                                                    ->with('booking.user')
-                                                    ->first();
+            $bookings = Booking::with(['user', 'bookable', 'transactions'])
+                ->whereIn('status', ['pending', 'confirmed'])
+                ->whereHas('transactions', function($query) {
+                    $query->where('status', 'pending');
+                })
+                ->orWhere('status', 'pending')
+                ->orderBy('created_at', 'desc')
+                ->paginate($perPage);
 
-            if (!$paymentTransaction) {
-                Log::error('Payment Transaction not found for Midtrans order_id: ' . $midtransOrderId);
-                return response()->json(['message' => 'Transaction not found'], 404); 
-            }
-
-            $booking = $paymentTransaction->booking;
-            $oldPaymentStatus = $paymentTransaction->status;
-            $oldBookingStatus = $booking->status;
-
-            // Mapping status yang tepat
-            $statusMap = [
-                'capture' => $fraudStatus == 'accept' ? 'success' : 'pending',
-                'settlement' => 'success',
-                'pending' => 'pending',
-                'deny' => 'failed',
-                'expire' => 'canceled',  // Midtrans expire -> canceled (bukan expired)
-                'cancel' => 'canceled'   // Midtrans cancel -> canceled
+            $stats = [
+                'total_pending_bookings' => Booking::where('status', 'pending')->count(),
+                'pending_payments' => PaymentTransaction::where('status', 'pending')->count(),
             ];
 
-            $newPaymentStatus = $statusMap[$transactionStatus] ?? $oldPaymentStatus;
-            
-            // Tentukan status booking berdasarkan status payment
-            $newBookingStatus = $oldBookingStatus;
-            if ($newPaymentStatus === 'success') {
-                $newBookingStatus = 'confirmed';
-            } elseif (in_array($newPaymentStatus, ['failed', 'canceled'])) {
-                $newBookingStatus = 'cancelled';
-            }
+            return new ApiResponseResources(true, 'Pending confirmations retrieved', [
+                'bookings' => $bookings,
+                'stats' => $stats
+            ]);
 
-            // Get system user dynamically
-            $systemUser = User::where('role', 'adminWeb')->first();
-            $systemUserId = $systemUser ? $systemUser->id : 1;
-
-            // Update payment transaction
-            if ($oldPaymentStatus !== $newPaymentStatus) {
-                $updateData = [
-                    'status' => $newPaymentStatus,
-                    'method' => $paymentType,
-                    'raw_response' => json_encode($notif->getResponse()),
-                ];
-
-                // Hanya set confirmed_at & confirmed_by untuk payment success
-                if ($newPaymentStatus === 'success') {
-                    $updateData['confirmed_at'] = now();
-                    $updateData['confirmed_by'] = $systemUserId;
-                }
-
-                $paymentTransaction->update($updateData);
-
-                Log::info('Payment status updated', [
-                    'transaction_id' => $paymentTransaction->id,
-                    'old_status' => $oldPaymentStatus,
-                    'new_status' => $newPaymentStatus
-                ]);
-            }
-
-            // Update booking status
-            if ($oldBookingStatus !== $newBookingStatus) {
-                $booking->update(['status' => $newBookingStatus]);
-                
-                BookingLog::create([
-                    'booking_id' => $booking->id,
-                    'user_id' => $systemUserId,
-                    'old_status' => $oldBookingStatus,
-                    'new_status' => $newBookingStatus,
-                    'notes' => 'Status updated via Midtrans notification: ' . $transactionStatus,
-                ]);
-
-                Log::info('Booking status updated', [
-                    'booking_id' => $booking->id,
-                    'old_status' => $oldBookingStatus,
-                    'new_status' => $newBookingStatus
-                ]);
-
-                // Send notifications
-                if ($newBookingStatus === 'confirmed') {
-                    $booking->user->notify(new PaymentConfirmationNotification($booking));
-                    
-                    // TODO: Send notification to admin/owner about new confirmed booking
-                }
-            }
-
-            return response()->json(['status' => 'ok'], 200);
-        });
+        } catch (\Exception $e) {
+            Log::error('Pending confirmations retrieval failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Failed to retrieve pending confirmations', null, 500);
+        }
     }
 
     /**
-     * Helper method untuk mendapatkan available payment statuses
+     * ADMIN/OWNER: Confirm booking with payment
+     * POST /management/bookings/{bookingId}/confirm-payment
      */
-    public function getPaymentStatuses()
+    public function confirmBookingWithPayment(Request $request, $bookingId)
     {
-        return [
-            'success' => 'Payment successful',
-            'pending' => 'Payment pending', 
-            'failed' => 'Payment failed',
-            'refunded' => 'Payment refunded',
-            'canceled' => 'Payment canceled'
-        ];
+        try {
+            $validator = Validator::make($request->all(), [
+                'amount' => 'required|numeric|min:1',
+                'payment_method' => 'required|in:cash,transfer,other',
+                'status' => 'required|in:success,pending,failed',
+                'notes' => 'nullable|string|max:500',
+            ]);
+
+            if ($validator->fails()) {
+                return new ApiResponseResources(false, $validator->errors(), null, 422);
+            }
+
+            $booking = Booking::with('user')->find($bookingId);
+            
+            if (!$booking) {
+                return new ApiResponseResources(false, 'Booking not found', null, 404);
+            }
+
+            return DB::transaction(function () use ($booking, $request) {
+                $admin = Auth::user();
+                
+                // Buat payment transaction
+                $transaction = PaymentTransaction::create([
+                    'booking_id' => $booking->id,
+                    'type' => 'Payment',
+                    'amount' => $request->amount,
+                    'method' => $request->payment_method,
+                    'status' => $request->status,
+                    'confirmed_at' => $request->status === 'success' ? now() : null,
+                    'confirmed_by' => $request->status === 'success' ? $admin->id : null,
+                    'transacted_at' => now(),
+                    'notes' => $request->notes,
+                ]);
+
+                // Update booking status jika payment success
+                if ($request->status === 'success') {
+                    $booking->update(['status' => 'confirmed']);
+                    
+                    BookingLog::create([
+                        'booking_id' => $booking->id,
+                        'user_id' => $admin->id,
+                        'old_status' => 'pending',
+                        'new_status' => 'confirmed',
+                        'notes' => 'Payment confirmed by admin. Amount: ' . $request->amount,
+                    ]);
+                }
+
+                return new ApiResponseResources(true, 'Payment confirmed successfully', [
+                    'transaction' => $transaction,
+                    'booking' => $booking,
+                ]);
+
+            });
+
+        } catch (\Exception $e) {
+            Log::error('Booking confirmation failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Failed to confirm booking', null, 500);
+        }
+    }
+
+    /**
+     * ADMIN/OWNER: Create manual payment for booking
+     * POST /management/bookings/{bookingId}/manual-payment
+     */
+    public function createManualPayment(Request $request, $bookingId)
+    {
+        // Sama dengan adminCreatePayment, bisa gunakan method yang sama
+        return $this->adminCreatePayment($request, $bookingId);
     }
 
     /**
@@ -341,6 +316,7 @@ class PaymentController extends Controller
             $search = $request->get('search');
             $dateFrom = $request->get('date_from');
             $dateTo = $request->get('date_to');
+            $paymentMethod = $request->get('payment_method');
 
             $query = PaymentTransaction::with(['booking.user', 'booking.bookable', 'confirmedBy'])
                 ->orderBy('created_at', 'desc');
@@ -350,9 +326,13 @@ class PaymentController extends Controller
                 $query->where('status', $status);
             }
 
+            if ($paymentMethod) {
+                $query->where('method', $paymentMethod);
+            }
+
             if ($search) {
                 $query->where(function($q) use ($search) {
-                    $q->where('gateway_reference', 'like', "%{$search}%")
+                    $q->where('id', 'like', "%{$search}%")
                     ->orWhereHas('booking', function($q) use ($search) {
                         $q->where('booking_code', 'like', "%{$search}%")
                             ->orWhereHas('user', function($q) use ($search) {
@@ -373,12 +353,14 @@ class PaymentController extends Controller
 
             $payments = $query->paginate($perPage);
 
+            // Stats
             $stats = [
                 'total_payments' => PaymentTransaction::count(),
                 'total_revenue' => PaymentTransaction::where('status', 'success')->sum('amount'),
                 'pending_payments' => PaymentTransaction::where('status', 'pending')->count(),
                 'successful_payments' => PaymentTransaction::where('status', 'success')->count(),
                 'failed_payments' => PaymentTransaction::where('status', 'failed')->count(),
+                'refunded_payments' => PaymentTransaction::where('status', 'refunded')->count(),
             ];
 
             return new ApiResponseResources(true, 'Admin payments retrieved successfully', [
@@ -410,7 +392,20 @@ class PaymentController extends Controller
                 return new ApiResponseResources(false, 'Payment not found', null, 404);
             }
 
-            return new ApiResponseResources(true, 'Payment details retrieved successfully', $payment);
+            // Get booking payment summary
+            $booking = $payment->booking;
+            $totalPaid = $booking->transactions()->where('status', 'success')->sum('amount');
+            $remaining = max(0, $booking->final_price - $totalPaid);
+
+            return new ApiResponseResources(true, 'Payment details retrieved successfully', [
+                'payment' => $payment,
+                'booking_summary' => [
+                    'total_amount' => $booking->final_price,
+                    'total_paid' => $totalPaid,
+                    'remaining' => $remaining,
+                    'is_fully_paid' => $remaining <= 0,
+                ]
+            ]);
 
         } catch (\Exception $e) {
             Log::error('Admin payment details failed: ' . $e->getMessage());
@@ -419,62 +414,179 @@ class PaymentController extends Controller
     }
 
     /**
-     * ADMIN: Update payment status (manual confirmation, etc.)
+     * ADMIN: Create manual payment for booking
      */
-    public function adminUpdateStatus(Request $request, $id)
+    public function adminCreatePayment(Request $request, $bookingId)
     {
         try {
             $validator = Validator::make($request->all(), [
-                'status' => 'required|in:success,pending,failed,refunded,canceled',
-                'notes' => 'nullable|string'
+                'amount' => 'required|numeric|min:1',
+                'payment_method' => 'required|in:cash,transfer,other',
+                'status' => 'required|in:success,pending,failed',
+                'payment_date' => 'required|date',
+                'notes' => 'nullable|string|max:500',
             ]);
 
             if ($validator->fails()) {
                 return new ApiResponseResources(false, $validator->errors(), null, 422);
             }
 
-            $payment = PaymentTransaction::with(['booking'])->find($id);
-            if (!$payment) {
-                return new ApiResponseResources(false, 'Payment not found', null, 404);
+            $booking = Booking::with('user')->find($bookingId);
+            
+            if (!$booking) {
+                return new ApiResponseResources(false, 'Booking not found', null, 404);
             }
 
-            $oldStatus = $payment->status;
-            $newStatus = $request->status;
+            // Validasi amount tidak melebihi sisa pembayaran
+            $totalPaid = $booking->transactions()->where('status', 'success')->sum('amount');
+            $remaining = max(0, $booking->final_price - $totalPaid);
+            
+            if ($request->amount > $remaining) {
+                return new ApiResponseResources(
+                    false, 
+                    'Payment amount exceeds remaining balance. Remaining: ' . number_format($remaining), 
+                    null, 
+                    422
+                );
+            }
 
-            DB::transaction(function () use ($payment, $oldStatus, $newStatus, $request) {
-                $payment->update([
-                    'status' => $newStatus,
-                    'confirmed_at' => $newStatus === 'success' ? now() : null,
-                    'confirmed_by' => $newStatus === 'success' ? Auth::id() : null,
+            return DB::transaction(function () use ($booking, $request) {
+                $admin = Auth::user();
+                $oldBookingStatus = $booking->status;
+                
+                // Buat payment transaction
+                $transaction = PaymentTransaction::create([
+                    'booking_id' => $booking->id,
+                    'type' => 'Payment',
+                    'amount' => $request->amount,
+                    'method' => $request->payment_method,
+                    'status' => $request->status,
+                    'confirmed_at' => $request->status === 'success' ? now() : null,
+                    'confirmed_by' => $request->status === 'success' ? $admin->id : null,
+                    'transacted_at' => $request->payment_date,
+                    'notes' => $request->notes,
                 ]);
 
-                // Update booking status if payment status changed to success
-                if ($newStatus === 'success' && $oldStatus !== 'success') {
-                    $payment->booking->update(['status' => 'confirmed']);
+                // Update booking status jika payment success
+                if ($request->status === 'success') {
+                    // Cek apakah sudah lunas
+                    $newTotalPaid = $booking->transactions()->where('status', 'success')->sum('amount');
+                    $newRemaining = max(0, $booking->final_price - $newTotalPaid);
                     
+                    $newBookingStatus = $newRemaining <= 0 ? 'confirmed' : 'pending_payment';
+                    
+                    if ($oldBookingStatus !== $newBookingStatus) {
+                        $booking->update(['status' => $newBookingStatus]);
+                        
+                        BookingLog::create([
+                            'booking_id' => $booking->id,
+                            'user_id' => $admin->id,
+                            'old_status' => $oldBookingStatus,
+                            'new_status' => $newBookingStatus,
+                            'notes' => 'Payment recorded by admin. Amount: ' . number_format($request->amount) . 
+                                      '. Method: ' . $request->payment_method . '. ' . ($request->notes ?? ''),
+                        ]);
+                    }
+
+                    // Notify user
+                    $booking->user->notify(new PaymentConfirmationNotification($booking, $transaction));
+                }
+
+                return new ApiResponseResources(true, 'Payment recorded successfully', [
+                    'transaction' => $transaction,
+                    'booking' => $booking->fresh(),
+                ]);
+
+            });
+
+        } catch (\Exception $e) {
+            Log::error('Admin payment creation failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Failed to record payment', null, 500);
+        }
+    }
+
+    /**
+     * ADMIN: Update payment status (confirm/reject payment proof)
+     */
+    public function adminUpdatePayment(Request $request, $transactionId)
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'status' => 'required|in:success,failed',
+                'notes' => 'nullable|string|max:500',
+            ]);
+
+            if ($validator->fails()) {
+                return new ApiResponseResources(false, $validator->errors(), null, 422);
+            }
+
+            $transaction = PaymentTransaction::with(['booking.user'])->find($transactionId);
+            
+            if (!$transaction) {
+                return new ApiResponseResources(false, 'Transaction not found', null, 404);
+            }
+
+            // Hanya bisa update yang statusnya pending
+            if ($transaction->status !== 'pending') {
+                return new ApiResponseResources(false, 'Only pending payments can be updated', null, 422);
+            }
+
+            return DB::transaction(function () use ($transaction, $request) {
+                $admin = Auth::user();
+                $booking = $transaction->booking;
+                $oldBookingStatus = $booking->status;
+                $oldPaymentStatus = $transaction->status;
+                
+                // Update transaction
+                $transaction->update([
+                    'status' => $request->status,
+                    'confirmed_at' => $request->status === 'success' ? now() : null,
+                    'confirmed_by' => $request->status === 'success' ? $admin->id : null,
+                ]);
+
+                // Update booking status jika payment success
+                if ($request->status === 'success') {
+                    // Cek apakah sudah lunas
+                    $totalPaid = $booking->transactions()->where('status', 'success')->sum('amount');
+                    $remaining = max(0, $booking->final_price - $totalPaid);
+                    
+                    $newBookingStatus = $remaining <= 0 ? 'confirmed' : 'pending_payment';
+                    
+                    if ($oldBookingStatus !== $newBookingStatus) {
+                        $booking->update(['status' => $newBookingStatus]);
+                        
+                        BookingLog::create([
+                            'booking_id' => $booking->id,
+                            'user_id' => $admin->id,
+                            'old_status' => $oldBookingStatus,
+                            'new_status' => $newBookingStatus,
+                            'notes' => 'Payment confirmed by admin. Amount: ' . number_format($transaction->amount) . 
+                                      '. Method: ' . $transaction->method . '. ' . ($request->notes ?? ''),
+                        ]);
+                    }
+
+                    // Notify user
+                    $booking->user->notify(new PaymentConfirmationNotification($booking, $transaction));
+                } else {
+                    // Jika payment failed, buat log
                     BookingLog::create([
-                        'booking_id' => $payment->booking->id,
-                        'user_id' => Auth::id(),
-                        'old_status' => $payment->booking->status,
-                        'new_status' => 'confirmed',
-                        'notes' => 'Payment manually confirmed by admin: ' . ($request->notes ?? ''),
+                        'booking_id' => $booking->id,
+                        'user_id' => $admin->id,
+                        'old_status' => $oldBookingStatus,
+                        'new_status' => $oldBookingStatus, // Status tetap
+                        'notes' => 'Payment rejected by admin. ' . ($request->notes ?? ''),
                     ]);
                 }
 
-                // Log the payment status change
-                Log::info('Payment status manually updated by admin', [
-                    'payment_id' => $payment->id,
-                    'admin_id' => Auth::id(),
-                    'old_status' => $oldStatus,
-                    'new_status' => $newStatus,
-                    'notes' => $request->notes
+                return new ApiResponseResources(true, 'Payment status updated successfully', [
+                    'transaction' => $transaction,
+                    'booking' => $booking,
                 ]);
+
             });
 
-            return new ApiResponseResources(true, 'Payment status updated successfully', $payment);
-
         } catch (\Exception $e) {
-            Log::error('Admin payment status update failed: ' . $e->getMessage());
+            Log::error('Admin payment update failed: ' . $e->getMessage());
             return new ApiResponseResources(false, 'Failed to update payment status', null, 500);
         }
     }
@@ -482,44 +594,134 @@ class PaymentController extends Controller
     /**
      * ADMIN: Process refund
      */
-    public function processRefund($id)
+    public function processRefund(Request $request, $transactionId)
     {
         try {
-            $payment = PaymentTransaction::with(['booking'])->find($id);
+            $validator = Validator::make($request->all(), [
+                'refund_amount' => 'required|numeric|min:1',
+                'reason' => 'required|string|max:500',
+            ]);
+
+            if ($validator->fails()) {
+                return new ApiResponseResources(false, $validator->errors(), null, 422);
+            }
+
+            $transaction = PaymentTransaction::with(['booking'])->find($transactionId);
             
-            if (!$payment) {
-                return new ApiResponseResources(false, 'Payment not found', null, 404);
+            if (!$transaction) {
+                return new ApiResponseResources(false, 'Transaction not found', null, 404);
             }
 
             // Only allow refund for successful payments
-            if ($payment->status !== 'success') {
+            if ($transaction->status !== 'success') {
                 return new ApiResponseResources(false, 'Only successful payments can be refunded', null, 422);
             }
 
-            // TODO: Integrate with Midtrans refund API
-            // For now, just update status manually
-            $payment->update([
-                'status' => 'refunded',
-                'confirmed_at' => now(),
-                'confirmed_by' => Auth::id(),
-            ]);
+            // Validasi refund amount tidak melebihi amount transaksi
+            if ($request->refund_amount > $transaction->amount) {
+                return new ApiResponseResources(false, 'Refund amount cannot exceed original payment amount', null, 422);
+            }
 
-            // Update booking status to cancelled
-            $payment->booking->update(['status' => 'cancelled']);
+            return DB::transaction(function () use ($transaction, $request) {
+                $admin = Auth::user();
+                $booking = $transaction->booking;
+                
+                // Buat transaksi refund
+                $refundTransaction = PaymentTransaction::create([
+                    'booking_id' => $booking->id,
+                    'type' => 'Refund',
+                    'amount' => $request->refund_amount,
+                    'method' => $transaction->method,
+                    'status' => 'refunded',
+                    'confirmed_at' => now(),
+                    'confirmed_by' => $admin->id,
+                    'transacted_at' => now(),
+                    'notes' => 'Refund: ' . $request->reason,
+                ]);
 
-            BookingLog::create([
-                'booking_id' => $payment->booking->id,
-                'user_id' => Auth::id(),
-                'old_status' => 'confirmed',
-                'new_status' => 'cancelled',
-                'notes' => 'Payment refunded by admin',
-            ]);
+                // Update booking status jika perlu
+                $totalPaid = $booking->transactions()
+                    ->where('status', 'success')
+                    ->where('type', 'Payment')
+                    ->sum('amount');
+                    
+                $totalRefunded = $booking->transactions()
+                    ->where('status', 'refunded')
+                    ->where('type', 'Refund')
+                    ->sum('amount');
+                    
+                $netAmount = $totalPaid - $totalRefunded;
+                
+                // Jika refund membuat booking unpaid, ubah status
+                if ($netAmount < $booking->final_price) {
+                    $booking->update(['status' => 'pending_payment']);
+                    
+                    BookingLog::create([
+                        'booking_id' => $booking->id,
+                        'user_id' => $admin->id,
+                        'old_status' => 'confirmed',
+                        'new_status' => 'pending_payment',
+                        'notes' => 'Refund processed. Amount: ' . number_format($request->refund_amount) . 
+                                  '. Reason: ' . $request->reason,
+                    ]);
+                }
 
-            return new ApiResponseResources(true, 'Refund processed successfully', $payment);
+                return new ApiResponseResources(true, 'Refund processed successfully', [
+                    'refund_transaction' => $refundTransaction,
+                    'booking' => $booking,
+                ]);
+
+            });
 
         } catch (\Exception $e) {
             Log::error('Refund processing failed: ' . $e->getMessage());
             return new ApiResponseResources(false, 'Failed to process refund', null, 500);
+        }
+    }
+
+    /**
+     * Get payment statistics
+     */
+    public function getPaymentStats()
+    {
+        try {
+            $today = now()->format('Y-m-d');
+            $firstDayOfMonth = now()->firstOfMonth()->format('Y-m-d');
+            $lastDayOfMonth = now()->lastOfMonth()->format('Y-m-d');
+
+            $stats = [
+                'today' => [
+                    'count' => PaymentTransaction::whereDate('created_at', $today)
+                        ->where('status', 'success')
+                        ->count(),
+                    'revenue' => PaymentTransaction::whereDate('created_at', $today)
+                        ->where('status', 'success')
+                        ->sum('amount'),
+                ],
+                'this_month' => [
+                    'count' => PaymentTransaction::whereBetween('created_at', [$firstDayOfMonth, $lastDayOfMonth])
+                        ->where('status', 'success')
+                        ->count(),
+                    'revenue' => PaymentTransaction::whereBetween('created_at', [$firstDayOfMonth, $lastDayOfMonth])
+                        ->where('status', 'success')
+                        ->sum('amount'),
+                ],
+                'all_time' => [
+                    'count' => PaymentTransaction::where('status', 'success')->count(),
+                    'revenue' => PaymentTransaction::where('status', 'success')->sum('amount'),
+                ],
+                'pending_count' => PaymentTransaction::where('status', 'pending')->count(),
+                'payment_methods' => PaymentTransaction::selectRaw('method, COUNT(*) as count, SUM(amount) as total')
+                    ->where('status', 'success')
+                    ->groupBy('method')
+                    ->get(),
+            ];
+
+            return new ApiResponseResources(true, 'Payment statistics retrieved', $stats);
+
+        } catch (\Exception $e) {
+            Log::error('Payment stats retrieval failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Failed to retrieve payment statistics', null, 500);
         }
     }
 }

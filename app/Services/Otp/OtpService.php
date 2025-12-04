@@ -7,6 +7,7 @@ use App\Models\TempToken; // <<< Menggunakan Model TempToken Anda
 use App\Models\User; // Perlu diimpor jika ingin menggunakan Type Hinting User
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 
@@ -66,10 +67,14 @@ class OtpService
     {
         // Pastikan ada user yang login untuk memverifikasi.
         if (!Auth::check()) {
+            Log::error('Auth::check() returned false in OtpService');
+            Log::error('Current user: ' . json_encode(Auth::user()));
             return false;
         }
 
         $email = Auth::user()->email;
+
+        Log::info('Verifying OTP for email: ' . $email . ' with token: ' . $token);
         
         // 1. Cari token berdasarkan email user yang login DAN token yang dimasukkan
         $otp = TempToken::where('email', $email)
@@ -78,18 +83,21 @@ class OtpService
 
         // 2. Cek validitas
         if (!$otp) {
+            Log::warning('OTP not found for email: ' . $email);
             // Token tidak ditemukan (kode salah)
             return false;
         }
         
         if (now()->greaterThan($otp->expired_at)) {
             // Token kedaluwarsa, hapus dari database untuk dibersihkan
+            Log::warning('OTP expired for email: ' . $email);
             $otp->delete(); 
             return false;
         }
 
         // 3. Verifikasi sukses: Hapus token dari database dan kembalikan true
         $otp->delete();
+        Log::info('OTP verification successful for email: ' . $email);
         return true;
     }
 }

@@ -78,8 +78,7 @@ class BookingController extends Controller
         }
         
         $validated = $validator->validated();
-        // --- PROSES UTAMA DALAM TRANSAKSI DATABASE ---
-        // Ini memastikan semua data tersimpan dengan aman. Jika ada error, semua akan dibatalkan.
+        
         try {
             $bookingData = DB::transaction(function () use ($validated) {
                 $user = auth()->user();
@@ -163,62 +162,46 @@ class BookingController extends Controller
                     BookingReward::insert($pivotData);
                 }
 
-                // --- 1. BUAT BOOKING LOG AWAL ('pending') ---
+                // --- BUAT BOOKING LOG AWAL ---
                 BookingLog::create([
                     'booking_id' => $booking->id,
-                    'user_id' => auth()->id(), // User yang membuat log
+                    'user_id' => $user->id, // User yang membuat booking
                     'old_status' => null,
                     'new_status' => 'pending',
-                    'notes' => 'Initial booking creation.',
+                    'notes' => 'Booking created successfully.',
                 ]);
 
-                // --- 2. BUAT RECORD PAYMENT TRANSACTION AWAL ---
-                // Transaksi Midtrans selalu dimulai dengan status 'pending' atau 'unpaid'.
-                // Kita gunakan 'pending' di sini untuk mewakili upaya pembayaran yang akan datang.
-                $transaction = PaymentTransaction::create([
-                    'booking_id' => $booking->id,
-                    'amount' => $finalPrice,
-                    'type' => 'Payment', // Tipe pembayaran utama
-                    'status' => 'pending', // Status awal, sebelum Midtrans dipanggil
-                    'method' => 'Midtrans/Snap', // Metode pembayaran yang dituju
-                    // Kolom lain seperti gateway_reference, confirmed_at, dll. akan diisi di PaymentController atau Callback
-                ]);
-
-                // --- KIRIM NOTIFIKASI KE OWNER ---
-                $owners = User::where('role', 'owner')->get(); 
-                if ($owners->isNotEmpty()) {
-                    foreach ($owners as $owner) {
-                        $owner->notify(new NewBookingNotification($booking));
-                        if ($owner->fcm_token) {
+                // --- KIRIM NOTIFIKASI KE OWNER DAN ADMIN ---
+                $adminsAndOwners = User::whereIn('role', ['owner', 'admin'])->get(); 
+                if ($adminsAndOwners->isNotEmpty()) {
+                    foreach ($adminsAndOwners as $admin) {
+                        $admin->notify(new NewBookingNotification($booking));
+                        if ($admin->fcm_token) {
                             $firebaseService = app(FirebaseNotificationService::class);
                             $firebaseService->sendToDevice(
-                                $owner->fcm_token,
+                                $admin->fcm_token,
                                 'New Booking!',
-                                'There is a new order for ' . $booking->bookable->name,
-                                ['booking_code' => $booking->booking_code]
+                                'New booking for ' . $booking->bookable->name . ' from ' . $user->name,
+                                [
+                                    'booking_code' => $booking->booking_code,
+                                    'booking_id' => $booking->id,
+                                    'type' => 'new_booking'
+                                ]
                             );
                         }
                     }
                 }
 
-                return ['booking' => $booking, 'transaction' => $transaction];
+                return ['booking' => $booking];
             });
 
-            // --- INTEGRASI MIDTRANS ---
-            $paymentController = new PaymentController();
-            // Panggil payBooking dengan ID PaymentTransaction yang baru
-            $paymentResponse = $paymentController->payBooking($bookingData['transaction']->id); 
-            $paymentData = $paymentResponse->original; 
-
-            // --- RETURN RESPONSE JSON ---
-            return new ApiResponseResources(true, 'Booking successful! Please proceed to payment.', [
+            // --- RETURN RESPONSE ---
+            return new ApiResponseResources(true, 'Booking successful! Our team will contact you for confirmation.', [
                 'booking' => $bookingData['booking']->load('bookable', 'rewards'),
-                // Ganti 'payment' menjadi 'transaction'
-                'transaction' => $paymentData['data'], 
             ], 201);
 
         } catch (\Exception $e) {
-            return new ApiResponseResources(false, 'Failed to create booking ' . $e->getMessage(), null, 500);
+            return new ApiResponseResources(false, 'Failed to create booking: ' . $e->getMessage(), null, 500);
         }
     }
 

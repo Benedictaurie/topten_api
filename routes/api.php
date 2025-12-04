@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ActivityPackageController;
@@ -40,8 +41,6 @@ Route::get('/rental-packages/detail/{id}', [RentalPackageController::class, 'sho
 
 Route::get('/reviews', [ReviewController::class, 'index']);
 
-Route::post('/payment/notification', [PaymentController::class, 'handleNotification']); //public payment callback
-
 // Authenticated routes - All logged in users
 Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('/verify-email', [AuthController::class, 'verifyEmail']);
@@ -73,8 +72,8 @@ Route::middleware(['auth:sanctum', 'role:customer', 'email.verified'])->group(fu
 
     //Payment transaction
     Route::get('/payments/booking/{bookingId}', [PaymentController::class, 'getBookingPayment']);
-    Route::post('/payments/{transactionId}/retry', [PaymentController::class, 'retryPayment']);
     Route::get('/payment-history', [PaymentController::class, 'paymentHistory']);
+    Route::post('/bookings/{bookingId}/upload-proof', [PaymentController::class, 'uploadProof']);
 
     //Review User
     Route::post('/bookings/{bookingId}/review', [ReviewController::class, 'store']);
@@ -85,17 +84,17 @@ Route::middleware(['auth:sanctum', 'role:customer', 'email.verified'])->group(fu
 //Only Admin Website can access this Route
 Route::middleware(['auth:sanctum', 'role:adminWeb'])->group(function () {
     // Package management
-    Route::post('/tour-packages', [TourPackageController::class, 'store']);
-    Route::put('/tour-packages/{id}', [TourPackageController::class, 'update']);
-    Route::delete('/tour-packages/{id}', [TourPackageController::class, 'delete']);
+    Route::post('/admin/tour-packages', [TourPackageController::class, 'store']);
+    Route::put('/admin/tour-packages/{id}', [TourPackageController::class, 'update']);
+    Route::delete('/admin/tour-packages/{id}', [TourPackageController::class, 'delete']);
     
-    Route::post('/activity-packages', [ActivityPackageController::class, 'store']);
-    Route::put('/activity-packages/{id}', [ActivityPackageController::class, 'update']);
-    Route::delete('/activity-packages/{id}', [ActivityPackageController::class, 'delete']);
+    Route::post('/admin/activity-packages', [ActivityPackageController::class, 'store']);
+    Route::put('/admin/activity-packages/{id}', [ActivityPackageController::class, 'update']);
+    Route::delete('/admin/activity-packages/{id}', [ActivityPackageController::class, 'delete']);
     
-    Route::post('/rental-packages', [RentalPackageController::class, 'store']);
-    Route::put('/rental-packages/{id}', [RentalPackageController::class, 'update']);
-    Route::delete('/rental-packages/{id}', [RentalPackageController::class, 'delete']);
+    Route::post('/admin/rental-packages', [RentalPackageController::class, 'store']);
+    Route::put('/admin/rental-packages/{id}', [RentalPackageController::class, 'update']);
+    Route::delete('/admin/rental-packages/{id}', [RentalPackageController::class, 'delete']);
     
     // User management
     Route::get('/admin/users', [UserController::class, 'index']);
@@ -105,6 +104,11 @@ Route::middleware(['auth:sanctum', 'role:adminWeb'])->group(function () {
     // Booking management
     Route::get('/admin/bookings', [BookingController::class, 'index']);
     Route::put('/admin/bookings/{id}/status', [BookingController::class, 'updateStatus']);
+
+    // Booking confirmation with payment (Admin specific)
+    // Route::post('/admin/bookings/{bookingId}/confirm-payment', [AdminController::class, 'confirmBookingWithPayment']);
+    // Route::get('/admin/bookings/pending-confirmations', [AdminController::class, 'getPendingConfirmations']);
+    // Route::post('/admin/bookings/{bookingId}/manual-payment', [AdminController::class, 'createManualPayment']);
     
     // Review management
     Route::get('/admin/reviews', [ReviewController::class, 'adminIndex']);
@@ -127,9 +131,32 @@ Route::middleware(['auth:sanctum', 'role:owner'])->group(function () {
     
     Route::get('/owner/recent-bookings', [UserController::class, 'recentBookings']);
     // Route::get('/owner/all-users', [UserController::class, 'allUsers']); // Jika perlu view semua user 
+
+    // Owner specific payment/booking management
+    // Route::get('/owner/bookings/pending-confirmations', [AdminController::class, 'getPendingConfirmations']);
+    // Route::post('/owner/bookings/{bookingId}/confirm-payment', [AdminController::class, 'confirmBookingWithPayment']);
+    // Route::post('/owner/bookings/{bookingId}/manual-payment', [AdminController::class, 'createManualPayment']);
+});
+
+// ADMIN & OWNER Payment Management Routes (Shared)
+Route::middleware(['auth:sanctum', 'role:adminWeb,owner'])->group(function () {
+    // Payment management (for both admin and owner)
+    Route::get('/management/payments', [PaymentController::class, 'adminIndex']);
+    Route::get('/management/payments/{id}', [PaymentController::class, 'adminShow']);
+    Route::post('/management/bookings/{bookingId}/create-payment', [PaymentController::class, 'adminCreatePayment']);
+    Route::patch('/management/payments/{transactionId}/update', [PaymentController::class, 'adminUpdatePayment']);
+    Route::post('/management/payments/{transactionId}/refund', [PaymentController::class, 'processRefund']);
+    
+    // Payment stats
+    Route::get('/management/payments/stats', [PaymentController::class, 'getPaymentStats']);
 });
 
 // Multiple roles example (jika diperlukan)
 Route::middleware(['auth:sanctum', 'role:adminWeb,owner'])->group(function () {
     Route::get('/management/stats', [UserController::class, 'managementStats']);
+
+    // Shared booking management
+    Route::get('/management/bookings', [BookingController::class, 'adminIndex']);
+    Route::get('/management/bookings/{id}', [BookingController::class, 'adminShow']);
+    Route::put('/management/bookings/{id}/update-status', [BookingController::class, 'adminUpdateStatus']);
 });
