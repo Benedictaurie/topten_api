@@ -290,50 +290,38 @@ class AuthController extends Controller
             return new ApiResponseResources(false, $validator->errors(), null, 422);
         }
 
-        try {
+         try {
             $user = User::where('email', $request->email)->first();
-            
+
+            // Cek apakah user ada dan password benar
             if (!$user || !Hash::check($request->password, $user->password)) {
                 return new ApiResponseResources(false, 'Email or Password is incorrect', null, 422);
             }
 
-            // Cek jika email belum verified
+            // Jika email belum diverifikasi → TIDAK GENERATE OTP LAGI
             if (!$user->email_verified_at) {
-                // Generate OTP baru
-                $this->otpService->generate($user->email);
-                
-                // Buat verification token
-                $user->tokens()->delete();
-                $verificationToken = $user->createToken(
-                    'verification_token',
-                    ['verify-email'],
-                    now()->addMinutes(30)
-                )->plainTextToken;
-                
                 return new ApiResponseResources(
                     false,
-                    'Please verify your email first',
+                    'Your account is not verified. Please verify your email first.',
                     [
-                        'user' => $user->makeHidden(['password', 'remember_token']),
-                        'verification_token' => $verificationToken,
+                        'email_verified' => false,
                         'email' => $user->email,
-                        'email_verified' => false
                     ],
                     403
                 );
             }
 
-            /// EMAIL SUDAH VERIFIED - Buat FULL ACCESS token
+            // EMAIL SUDAH VERIFIED → langsung buat FULL ACCESS TOKEN
             $user->tokens()->delete();
             $accessToken = $user->createToken('access_token')->plainTextToken;
 
             return new ApiResponseResources(
-                true, 
-                'Login successful', 
+                true,
+                'Login successful',
                 [
                     'user' => $user->makeHidden(['password', 'remember_token']),
                     'access_token' => $accessToken,
-                    'email_verified' => true // ✅ boolean untuk response
+                    'email_verified' => true,
                 ]
             );
 
