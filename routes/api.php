@@ -26,6 +26,8 @@ use App\Http\Controllers\ReviewController;
 // Public routes - Everyone can access
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
+Route::post('/verify-email', [AuthController::class, 'verifyEmail']);
+Route::post('/resend-verification-otp', [AuthController::class, 'resendVerificationOtp']);
 Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 
@@ -43,7 +45,6 @@ Route::get('/reviews', [ReviewController::class, 'index']);
 
 // Authenticated routes - All logged in users
 Route::middleware(['auth:sanctum'])->group(function () {
-    Route::post('/verify-email', [AuthController::class, 'verifyEmail']);
     Route::post('/change-password', [AuthController::class, 'updatePassword']);
     Route::post('/logout', [AuthController::class, 'logout']);
 

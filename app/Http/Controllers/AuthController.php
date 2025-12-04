@@ -44,7 +44,8 @@ class AuthController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|min:3|max:100',
             'email'     => 'required|email|unique:users',
-            'password'  => 'required|min:8',   
+            'password'  => 'required|min:8|confirmed',   
+            'password_confirmation' => 'required|min:8',
             'phone_number' => 'nullable|string|max:20', 
         ], $messages);
 
@@ -68,8 +69,9 @@ class AuthController extends Controller
 
             // BUAT LIMITED TOKEN (hanya untuk verify email)
             $user->tokens()->delete();
-            $verifyToken = $user->createToken(
-                'verify_token',
+
+            $verificationToken = $user->createToken(
+                'verification_token',
                 ['verify-email'], // Limited scope
                 now()->addMinutes(30) // Expire dalam 30 menit
             )->plainTextToken;
@@ -85,6 +87,8 @@ class AuthController extends Controller
                 'Registration successful! Please check your email for OTP verification.',
                 [
                     'user' => $user->makeHidden(['password', 'remember_token']),
+                    'verification_token' => $verificationToken,
+                    'email' => $user->email,
                     'email_verified' => false
                 ],
                 201
@@ -101,12 +105,15 @@ class AuthController extends Controller
     {
         // 1. Input Validation (Adopting Your friend's OTP structure)
         $messages = [
+            'email.required' => 'Email is required',
+            'email.email' => 'Invalid email format',
             'otp.required' => 'The OTP code is required!',
             'otp.digits' => 'The OTP code must be 6 digits!',
             'otp.integer' => 'The OTP code must be an integer',
         ];
 
         $validator = Validator::make($request->all(), [
+            'email' => 'required|email|exists:users,email',
             'otp' => 'required|integer|digits:6',
         ], $messages);
 
@@ -115,43 +122,47 @@ class AuthController extends Controller
         }
 
         // Get the authenticated user
-        $user = Auth::user();
+        $user = User::where('email', $request->email)->first();
 
         /** @var \App\Models\User|null $user */ // Memberi tahu: $user bisa Model User atau NULL
 
         if (!$user) {
-            return new ApiResponseResources(false, 'User not authenticated', null, 401);
+            return new ApiResponseResources(false, 'User not found', null, 401);
         }
         
         // Check if the email is already verified
         if ($user->email_verified_at) {
-        return new ApiResponseResources(true, 'Your email is already verified', [
-            'user' => $user->makeHidden(['password', 'remember_token']),
-            'email_verified' => true // boolean untuk response
-        ]);
-    }
-
-        // 2. OTP Verification - PERBAIKAN DI SINI
-        // Hanya kirim OTP saja, karena OtpService akan ambil email dari Auth::user()
-        $succeed = $this->otpService->verify($request->otp); // ← HANYA 1 PARAMETER
-        
-        if (!$succeed) {
-            // Failed OTP Message
-            return new ApiResponseResources(false, 'Incorrect or Expired OTP Code!', null, 422);
+            return new ApiResponseResources(true, 'Your email is already verified', [
+                'user' => $user->makeHidden(['password', 'remember_token']),
+                'email_verified' => true
+            ]);
         }
+        
 
-        // 3. Update Verification Status & Reward
+        // OTP Verification - Gunakan TempToken (sesuai dengan OtpService)
         try {
+            // Karena OtpService Anda menggunakan TempToken, kita perlu method baru
+            $succeed = $this->verifyOtpWithEmail($request->otp, $request->email);
+            
+            if (!$succeed) {
+                return new ApiResponseResources(false, 'Incorrect or Expired OTP Code!', null, 422);
+            }
+
+            //Update verification status & beri reward
             DB::beginTransaction();
 
-            // Apply email verification timestamp
             $user->email_verified_at = now();
             $user->save();
 
-            // Create welcome reward after email verification
+            // Create welcome reward
             $reward = $this->createWelcomeReward($user);
 
             DB::commit();
+
+            // Buat FULL ACCESS token setelah verifikasi
+            $user->tokens()->delete(); // Hapus semua token lama
+            
+            $accessToken = $user->createToken('access_token', ['*'], now()->addDays(7))->plainTextToken;
 
             $message = 'Email verification successful!';
             if ($reward) {
@@ -160,56 +171,77 @@ class AuthController extends Controller
 
             return new ApiResponseResources(true, $message, [
                 'user' => $user->makeHidden(['password', 'remember_token']),
+                'access_token' => $accessToken, // Kirim FULL ACCESS token
                 'email_verified' => true,
                 'reward' => $reward
             ]);
 
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Email verification and reward failed: ' . $e->getMessage());
-            return new ApiResponseResources(false, 'Email verification failed due to system error', null, 500);
+            Log::error('Email verification failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Email verification failed', null, 500);
         }
-
-        if ($this->otpService->verify($request->otp)) {
-            // Update verification status
-            $user->email_verified_at = now();
-            $user->save();
-            
-            // HAPUS verify token, BUAT full access token
-            $user->tokens()->delete();
-            $accessToken = $user->createToken('access_token')->plainTextToken;
-            
-            // Create welcome reward
-            $reward = $this->createWelcomeReward($user);
-            
-            return new ApiResponseResources(
-                true,
-                'Email verified successfully!',
-                [
-                    'user' => $user,
-                    'access_token' => $accessToken, // FULL ACCESS TOKEN
-                    'email_verified' => true,
-                    'reward' => $reward
-                ]
-            );
-        }
-    
-        return new ApiResponseResources(false, 'Invalid OTP', null, 422);
     }
 
-     public function resendOtp(Request $request)
+    private function verifyOtpWithEmail($otpCode, $email)
     {
-        if (!Auth::check()) {
-            return new ApiResponseResources(false, 'Unauthorized', null, 401);
+        try {
+            // Cari OTP di TempToken sesuai dengan struktur OtpService Anda
+            $otp = \App\Models\TempToken::where('email', $email)
+                ->where('token', $otpCode)
+                ->first();
+
+            if (!$otp) {
+                Log::warning('OTP not found for email: ' . $email);
+                return false;
+            }
+            
+            // Cek expired
+            if (now()->greaterThan($otp->expired_at)) {
+                Log::warning('OTP expired for email: ' . $email);
+                $otp->delete(); 
+                return false;
+            }
+
+            // Verifikasi sukses: Hapus token
+            $otp->delete();
+            Log::info('OTP verification successful for email: ' . $email);
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('OTP verification failed: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Resend OTP untuk verification (tanpa perlu login)
+     */
+    public function resendVerificationOtp(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'email' => 'required|email|exists:users,email',
+        ]);
+
+        if ($validator->fails()) {
+            return new ApiResponseResources(false, $validator->errors(), null, 422);
         }
 
-        $user = Auth::user();
-        
         try {
+            $user = User::where('email', $request->email)->first();
+            
+            if ($user->email_verified_at) {
+                return new ApiResponseResources(true, 'Email already verified');
+            }
+
+            // Generate OTP baru
             $this->otpService->generate($user->email);
-            return new ApiResponseResources(true, 'OTP successfully resent');
+            
+            return new ApiResponseResources(true, 'OTP has been resent to your email');
+
         } catch (\Exception $e) {
-            return new ApiResponseResources(false, 'Failed to send OTP: ' . $e->getMessage(), null, 500);
+            Log::error('Resend OTP failed: ' . $e->getMessage());
+            return new ApiResponseResources(false, 'Failed to resend OTP', null, 500);
         }
     }
 
@@ -265,33 +297,42 @@ class AuthController extends Controller
                 return new ApiResponseResources(false, 'Email or Password is incorrect', null, 422);
             }
 
-            // KASIH TEMPORARY TOKEN MESKI BELUM VERIFIED
-            $user->tokens()->delete();
-            $token = $user->createToken('auth_token')->plainTextToken;
-
-            // GENERATE OTP SETIAP LOGIN (jika belum verified)
+            // Cek jika email belum verified
             if (!$user->email_verified_at) {
+                // Generate OTP baru
                 $this->otpService->generate($user->email);
                 
+                // Buat verification token
+                $user->tokens()->delete();
+                $verificationToken = $user->createToken(
+                    'verification_token',
+                    ['verify-email'],
+                    now()->addMinutes(30)
+                )->plainTextToken;
+                
                 return new ApiResponseResources(
-                    false, // Login technically gagal
+                    false,
                     'Please verify your email first',
                     [
                         'user' => $user->makeHidden(['password', 'remember_token']),
-                        'token' => $token, // KASIH TOKEN untuk verify
-                        'email_verified' => false // boolean untuk response
+                        'verification_token' => $verificationToken,
+                        'email' => $user->email,
+                        'email_verified' => false
                     ],
                     403
                 );
             }
 
-            // EMAIL SUDAH VERIFIED
+            /// EMAIL SUDAH VERIFIED - Buat FULL ACCESS token
+            $user->tokens()->delete();
+            $accessToken = $user->createToken('access_token')->plainTextToken;
+
             return new ApiResponseResources(
                 true, 
                 'Login successful', 
                 [
                     'user' => $user->makeHidden(['password', 'remember_token']),
-                    'token' => $token,
+                    'access_token' => $accessToken,
                     'email_verified' => true // ✅ boolean untuk response
                 ]
             );
