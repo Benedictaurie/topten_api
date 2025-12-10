@@ -179,7 +179,7 @@ class AuthController extends Controller
         try {
             // Cari OTP di TempToken sesuai dengan struktur OtpService Anda
             $otp = \App\Models\TempToken::where('email', $email)
-                ->where('token', $otpCode)
+                ->where('token', (string) $otpCode)
                 ->first();
 
             if (!$otp) {
