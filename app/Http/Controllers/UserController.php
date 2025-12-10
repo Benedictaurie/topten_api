@@ -5,8 +5,6 @@ namespace App\Http\Controllers;
 use App\Http\Resources\ApiResponseResources;
 use App\Models\User;
 use App\Models\Booking;
-use App\Models\Driver;
-use App\Models\PaymentTransaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
@@ -82,7 +80,7 @@ class UserController extends Controller
     }
 
     /**
-     * ADMIN: Get all users (for admin website)
+     * ADMIN: Get all users (for admin)
      * GET /admin/users
      */
     public function index(Request $request)
@@ -108,7 +106,7 @@ class UserController extends Controller
     public function show($id)
     {
         try {
-            $user = User::with(['bookings', 'rewards', 'reviews'])->find($id);
+            $user = User::with(['bookings', 'reviews'])->find($id);
 
             if (!$user) {
                 return new ApiResponseResources(false, 'User not found', null, 404);
@@ -140,7 +138,7 @@ class UserController extends Controller
             'name' => 'required|min:3|max:100',
             'phone_number' => 'nullable|regex:/^[0-9+\-\s()]+$/',
             'address' => 'nullable|string|max:255',
-            'role' => 'nullable|in:customer,adminWeb,owner,driver',
+            'role' => 'nullable|in:user,admin',
         ], $messages);
 
         if ($validator->fails()) {
@@ -165,10 +163,9 @@ class UserController extends Controller
     }
 
     /**
-     * OWNER: Dashboard statistics untuk mobile
-     * GET /owner/dashboard 
+     *  Dashboard statistics untuk mobile
      */
-    public function ownerDashboard()
+    public function mobileDashboard()
     {
         try {
             $today = now()->toDateString();
@@ -176,7 +173,6 @@ class UserController extends Controller
 
             // 1. Stats utama
             $todayBookings = Booking::whereDate('created_at', $today)->count();
-            $activeDrivers = Driver::where('status', 'active')->count();
             
             // 2. Booking untuk hari ini & besok dengan bookable relation
             $todayAndTomorrowBookings = Booking::with(['user', 'bookable', 'transactions'])
@@ -188,7 +184,7 @@ class UserController extends Controller
                 ->orderBy('created_at', 'desc')
                 ->get()
                 ->groupBy(function($booking) {
-                    return $booking->user->name; // Group by customer name
+                    return $booking->user->name; // Group by user name
                 });
 
             // 3. Format grouped bookings untuk response
@@ -209,22 +205,7 @@ class UserController extends Controller
                 });
             });
 
-            // 4. Driver aktif (hanya info dasar, tanpa relasi booking)
-            $activeDriversToday = Driver::with(['user'])
-                ->where('status', 'active')
-                ->get()
-                ->map(function($driver) {
-                    return [
-                        'id' => $driver->id,
-                        'name' => $driver->user->name ?? 'Driver',
-                        'vehicle_type' => $driver->vehicle_type,
-                        'license_plate' => $driver->license_plate,
-                        'status' => 'Aktif',
-                        'last_active' => $driver->last_active?->format('H:i') ?? 'N/A'
-                    ];
-                });
-
-            // 5. Booking status counts
+            // Booking status counts
             $paidBookingsToday = Booking::whereHas('transactions', function($query) {
                     $query->where('status', 'paid');
                 })
@@ -240,15 +221,11 @@ class UserController extends Controller
             $stats = [
                 // Stats cards
                 'today_bookings' => $todayBookings,
-                'active_drivers' => $activeDrivers,
                 'paid_bookings' => $paidBookingsToday,
                 'pending_bookings' => $pendingBookingsToday,
                 
                 // Grouped bookings untuk tampilan mobile
                 'grouped_bookings' => $formattedBookings,
-                
-                // Driver aktif (hanya list driver, tanpa info booking)
-                'active_drivers_today' => $activeDriversToday,
                 
                 // Summary stats
                 'booking_summary' => [
@@ -259,10 +236,10 @@ class UserController extends Controller
                 ]
             ];
 
-            return new ApiResponseResources(true, 'Owner dashboard data retrieved', $stats);
+            return new ApiResponseResources(true, 'Dashboard data retrieved', $stats);
 
         } catch (\Exception $e) {
-            Log::error('Owner dashboard error: ' . $e->getMessage());
+            Log::error('Dashboard error: ' . $e->getMessage());
             return new ApiResponseResources(false, 'Failed to retrieve dashboard data', null, 500);
         }
     }
@@ -276,17 +253,17 @@ class UserController extends Controller
         $tomorrow = now()->addDay()->toDateString();
         
         if ($date == $today) {
-            return 'Hari ini';
+            return 'Today';
         } elseif ($date == $tomorrow) {
-            return 'Besok';
+            return 'Tomorrow';
         } else {
             return \Carbon\Carbon::parse($date)->format('d/m/Y');
         }
     }
 
     /**
-     * OWNER: Recent bookings dengan filter
-     * GET /owner/recent-bookings?days=7&status=paid
+     * Recent bookings dengan filter
+     * GET admin/recent-bookings?days=7&status=paid
      */
     public function recentBookings(Request $request)
     {
@@ -335,16 +312,15 @@ class UserController extends Controller
     }
 
     /**
-     * OWNER: System statistics
-     * GET /owner/system-stats 
+     * System statistics
+     * GET /system-stats 
      * System statistics lengkap
      */
     public function systemStats()
     {
         try {
             $totalBookings = Booking::count();
-            $totalRevenue = PaymentTransaction::where('status', 'paid')->sum('amount');
-            $activeCustomers = User::where('role', 'customer')->count();
+            $activeUsers = User::where('role', 'user')->count();
             
             // Monthly growth (example)
             $lastMonthUsers = User::where('created_at', '>=', now()->subMonth())->count();
@@ -356,8 +332,7 @@ class UserController extends Controller
 
             $stats = [
                 'total_bookings' => $totalBookings,
-                'total_revenue' => $totalRevenue,
-                'active_customers' => $activeCustomers,
+                'active_users' => $activeUsers,
                 'user_growth_percentage' => round($userGrowth, 2)
             ];
 
@@ -370,7 +345,7 @@ class UserController extends Controller
     }
 
     /**
-     * OWNER: Broadcast notification
+     * Broadcast notification
      */
     public function broadcastNotification(Request $request)
     {
@@ -378,7 +353,7 @@ class UserController extends Controller
             'title' => 'required|string|max:255',
             'message' => 'required|string',
             'target_roles' => 'nullable|array',
-            'target_roles.*' => 'in:customer,adminWeb,owner,driver'
+            'target_roles.*' => 'in:user,admin'
         ]);
 
         if ($validator->fails()) {
@@ -388,7 +363,7 @@ class UserController extends Controller
         try {
             // Here you would integrate with FCM to send notifications
             // This is a simplified example
-            $targetRoles = $request->target_roles ?? ['customer', 'adminWeb', 'owner', 'driver'];
+            $targetRoles = $request->target_roles ?? ['user', 'admin'];
             
             // Logic to send FCM notifications to users with target roles
             // You would typically use a job queue for this
@@ -408,9 +383,9 @@ class UserController extends Controller
     }
 
     /**
-     * MANAGEMENT: Stats for both adminWeb and owner
+     * MANAGEMENT: Stats for both admin 
      * GET /management/stats
-     * Bisa diakses adminWeb dan owner
+     * Bisa diakses admin 
      */
     public function managementStats()
     {
@@ -419,7 +394,6 @@ class UserController extends Controller
                 'total_users' => User::count(),
                 'total_bookings' => Booking::count(),
                 'pending_bookings' => Booking::where('status', 'pending')->count(),
-                'total_revenue' => PaymentTransaction::where('status', 'paid')->sum('amount')
             ];
 
             return new ApiResponseResources(true, 'Management stats retrieved', $stats);

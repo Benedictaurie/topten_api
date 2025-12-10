@@ -12,6 +12,9 @@ class TourPackage extends Model
      protected $fillable = [
         'name',
         'description',
+        'itinerary',
+        'includes',
+        'excludes',
         'price_per_person',
         'min_persons',
         'duration_days',

@@ -26,10 +26,22 @@ class TourPackageController extends Controller
      */
     public function index()
     {
-        $packages = TourPackage::where('is_available', true)->paginate(2);
+        $packages = TourPackage::all();
+        // dd($packages);
         // Tambahkan 'images' agar muncul di listing
-        $packages->load('images'); 
+        // $packages->load('images'); 
         return new ApiResponseResources(true, 'Tour packages retrieved successfully', $packages);
+        // return response() -> json($packages);
+    }
+
+    public function adminIndex()
+    {
+        $packages = TourPackage::all();
+        // dd($packages);
+        // Tambahkan 'images' agar muncul di listing
+        // $packages->load('images'); 
+        return new ApiResponseResources(true, 'Tour packages retrieved successfully', $packages);
+        // return response() -> json($packages);
     }
 
     /**
@@ -67,6 +79,9 @@ class TourPackageController extends Controller
             'name.required' => 'Name is required',
             'name.max' => 'Name may not be greater than 255 characters!',
             'description.required' => 'Fill the description here',
+            'itinerary.required' => 'Itinerary is required',
+            'includes.required' => 'Includes is required',
+            'excludes.required'=> 'Excludes is required',
             'price_per_person.required' => 'Price per person is required',
             'price_per_person.numeric' => 'The price must be entered as a number',
             'min_persons.required' => 'Minimum number of people is required',
@@ -83,6 +98,9 @@ class TourPackageController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|max:255',
             'description' => 'required',
+            'itinerary' => 'required',
+            'includes' => 'required',
+            'excludes' => 'required',
             'price_per_person' => 'required|numeric',
             'min_persons' => 'required|numeric',
             'duration_days' => 'required|numeric', 
@@ -97,6 +115,9 @@ class TourPackageController extends Controller
         $tourPackage = TourPackage::create([
             'name' => $request->name,
             'description' => $request->description,
+            'itinerary' => $request->itinerary,
+            'includes' => $request->includes,
+            'excludes' => $request->excludes,
             'price_per_person' => $request->price_per_person,
             'min_persons' => $request->min_persons,
             'duration_days' => $request->duration_days, 
@@ -148,6 +169,9 @@ class TourPackageController extends Controller
             'name.required' => 'Name is required',
             'name.max' => 'Name may not be greater than 255 characters!',
             'description.required' => 'Fill the description here',
+            'itinerary.required' => 'Itinerary is required',
+            'includes.required' => 'Includes is required',
+            'excludes.required'=> 'Excludes is required',
             'price_per_person.required' => 'Price is required',
             'price_per_person.numeric' => 'The price must be entered as a number',
             'min_persons.required' => 'Minimum number of people is required',
@@ -164,6 +188,9 @@ class TourPackageController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|max:255',
             'description' => 'required',
+            'itinerary' => 'required',
+            'includes' => 'required',
+            'excludes' => 'required',
             'price_per_person' => 'required|numeric',
             'min_persons' => 'required|numeric',
             'duration_days' => 'required|numeric', 
@@ -178,6 +205,9 @@ class TourPackageController extends Controller
         $tourPackage->update([
             'name' => $request->name,
             'description' => $request->description,
+            'itinerary' => $request->itinerary,
+            'includes' => $request->includes,
+            'excludes' => $request->excludes,
             'price_per_person' => $request->price_per_person,
             'min_persons' => $request->min_persons,
             'duration_days' => $request->duration_days,

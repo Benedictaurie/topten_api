@@ -4,11 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Booking;
 use App\Models\PaymentTransaction;
-use App\Models\BookingLog;
 use Illuminate\Http\Request;
-use Midtrans\Config;
-use Midtrans\Snap;
-use Midtrans\Notification;
 use App\Http\Resources\ApiResponseResources;
 use App\Models\User;
 use App\Notifications\PaymentConfirmationNotification;
@@ -21,15 +17,6 @@ use Illuminate\Support\Facades\Validator;
 
 class PaymentController extends Controller
 {
-    // public function __construct()
-    // {
-    //     // Set konfigurasi Midtrans
-    //     Config::$serverKey = env('MIDTRANS_SERVER_KEY');
-    //     Config::$isProduction = (bool) env('MIDTRANS_IS_PRODUCTION');
-    //     Config::$isSanitized = true;
-    //     Config::$is3ds = true;
-    // }
-
      /**
      * Get payment details for a booking (Customer)
      */
@@ -150,21 +137,8 @@ class PaymentController extends Controller
                     'transacted_at' => now(),
                 ]);
 
-                // Update booking status jika sebelumnya pending
-                if ($booking->status === 'pending') {
-                    $booking->update(['status' => 'pending_payment']);
-                    
-                    BookingLog::create([
-                        'booking_id' => $booking->id,
-                        'user_id' => $user->id,
-                        'old_status' => 'pending',
-                        'new_status' => 'pending_payment',
-                        'notes' => 'Proof of payment uploaded. Waiting for admin confirmation.',
-                    ]);
-                }
-
                 // Notify admin
-                $admins = User::whereIn('role', ['admin', 'owner'])->get();
+                $admins = User::whereIn('role', ['admin'])->get();
                 foreach ($admins as $admin) {
                     if ($admin->fcm_token) {
                         $firebaseService = app(FirebaseNotificationService::class);
@@ -196,7 +170,7 @@ class PaymentController extends Controller
     }
 
     /**
-     * ADMIN/OWNER: Get bookings pending confirmation
+     * ADMIN: Get bookings pending confirmation
      * GET /management/bookings/pending-confirmations
      */
     public function getPendingConfirmations(Request $request)
@@ -230,7 +204,7 @@ class PaymentController extends Controller
     }
 
     /**
-     * ADMIN/OWNER: Confirm booking with payment
+     * ADMIN: Confirm booking with payment
      * POST /management/bookings/{bookingId}/confirm-payment
      */
     public function confirmBookingWithPayment(Request $request, $bookingId)
@@ -269,19 +243,6 @@ class PaymentController extends Controller
                     'notes' => $request->notes,
                 ]);
 
-                // Update booking status jika payment success
-                if ($request->status === 'success') {
-                    $booking->update(['status' => 'confirmed']);
-                    
-                    BookingLog::create([
-                        'booking_id' => $booking->id,
-                        'user_id' => $admin->id,
-                        'old_status' => 'pending',
-                        'new_status' => 'confirmed',
-                        'notes' => 'Payment confirmed by admin. Amount: ' . $request->amount,
-                    ]);
-                }
-
                 return new ApiResponseResources(true, 'Payment confirmed successfully', [
                     'transaction' => $transaction,
                     'booking' => $booking,
@@ -296,7 +257,7 @@ class PaymentController extends Controller
     }
 
     /**
-     * ADMIN/OWNER: Create manual payment for booking
+     * ADMIN: Create manual payment for booking
      * POST /management/bookings/{bookingId}/manual-payment
      */
     public function createManualPayment(Request $request, $bookingId)
@@ -469,25 +430,6 @@ class PaymentController extends Controller
 
                 // Update booking status jika payment success
                 if ($request->status === 'success') {
-                    // Cek apakah sudah lunas
-                    $newTotalPaid = $booking->transactions()->where('status', 'success')->sum('amount');
-                    $newRemaining = max(0, $booking->final_price - $newTotalPaid);
-                    
-                    $newBookingStatus = $newRemaining <= 0 ? 'confirmed' : 'pending_payment';
-                    
-                    if ($oldBookingStatus !== $newBookingStatus) {
-                        $booking->update(['status' => $newBookingStatus]);
-                        
-                        BookingLog::create([
-                            'booking_id' => $booking->id,
-                            'user_id' => $admin->id,
-                            'old_status' => $oldBookingStatus,
-                            'new_status' => $newBookingStatus,
-                            'notes' => 'Payment recorded by admin. Amount: ' . number_format($request->amount) . 
-                                      '. Method: ' . $request->payment_method . '. ' . ($request->notes ?? ''),
-                        ]);
-                    }
-
                     // Notify user
                     $booking->user->notify(new PaymentConfirmationNotification($booking, $transaction));
                 }
@@ -543,46 +485,11 @@ class PaymentController extends Controller
                     'confirmed_at' => $request->status === 'success' ? now() : null,
                     'confirmed_by' => $request->status === 'success' ? $admin->id : null,
                 ]);
-
-                // Update booking status jika payment success
-                if ($request->status === 'success') {
-                    // Cek apakah sudah lunas
-                    $totalPaid = $booking->transactions()->where('status', 'success')->sum('amount');
-                    $remaining = max(0, $booking->final_price - $totalPaid);
-                    
-                    $newBookingStatus = $remaining <= 0 ? 'confirmed' : 'pending_payment';
-                    
-                    if ($oldBookingStatus !== $newBookingStatus) {
-                        $booking->update(['status' => $newBookingStatus]);
-                        
-                        BookingLog::create([
-                            'booking_id' => $booking->id,
-                            'user_id' => $admin->id,
-                            'old_status' => $oldBookingStatus,
-                            'new_status' => $newBookingStatus,
-                            'notes' => 'Payment confirmed by admin. Amount: ' . number_format($transaction->amount) . 
-                                      '. Method: ' . $transaction->method . '. ' . ($request->notes ?? ''),
-                        ]);
-                    }
-
-                    // Notify user
-                    $booking->user->notify(new PaymentConfirmationNotification($booking, $transaction));
-                } else {
-                    // Jika payment failed, buat log
-                    BookingLog::create([
-                        'booking_id' => $booking->id,
-                        'user_id' => $admin->id,
-                        'old_status' => $oldBookingStatus,
-                        'new_status' => $oldBookingStatus, // Status tetap
-                        'notes' => 'Payment rejected by admin. ' . ($request->notes ?? ''),
-                    ]);
-                }
-
+                
                 return new ApiResponseResources(true, 'Payment status updated successfully', [
                     'transaction' => $transaction,
                     'booking' => $booking,
                 ]);
-
             });
 
         } catch (\Exception $e) {
@@ -638,33 +545,6 @@ class PaymentController extends Controller
                     'transacted_at' => now(),
                     'notes' => 'Refund: ' . $request->reason,
                 ]);
-
-                // Update booking status jika perlu
-                $totalPaid = $booking->transactions()
-                    ->where('status', 'success')
-                    ->where('type', 'Payment')
-                    ->sum('amount');
-                    
-                $totalRefunded = $booking->transactions()
-                    ->where('status', 'refunded')
-                    ->where('type', 'Refund')
-                    ->sum('amount');
-                    
-                $netAmount = $totalPaid - $totalRefunded;
-                
-                // Jika refund membuat booking unpaid, ubah status
-                if ($netAmount < $booking->final_price) {
-                    $booking->update(['status' => 'pending_payment']);
-                    
-                    BookingLog::create([
-                        'booking_id' => $booking->id,
-                        'user_id' => $admin->id,
-                        'old_status' => 'confirmed',
-                        'new_status' => 'pending_payment',
-                        'notes' => 'Refund processed. Amount: ' . number_format($request->refund_amount) . 
-                                  '. Reason: ' . $request->reason,
-                    ]);
-                }
 
                 return new ApiResponseResources(true, 'Refund processed successfully', [
                     'refund_transaction' => $refundTransaction,

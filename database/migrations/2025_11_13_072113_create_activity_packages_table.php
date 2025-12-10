@@ -15,7 +15,10 @@ return new class extends Migration
             $table->id();
             $table->string('name');
             $table->text('description');
-            $table->decimal('price_per_person', 10,2); //harga per orang utk paket activity
+            $table->text('itinerary');
+            $table->text('includes');
+            $table->text('excludes');
+            $table->integer('price_per_person'); //harga per orang utk paket activity
             $table->integer('min_persons'); //jumlah orang minimum untuk harga paket 
             $table->integer('duration_hours'); //durasi waktu untuk satu activity
             $table->boolean('is_available')->default(true);

@@ -26,10 +26,19 @@ class ActivityPackageController extends Controller
      */
     public function index()
     {
-        $packages = ActivityPackage::where('is_available', true)->paginate(2);
+        $packages = ActivityPackage::all();
+        // $packages = ActivityPackage::where('is_available', true)->paginate(2);
         // Tambahkan 'images' agar muncul di listing
-        $packages->load('images');
+        // $packages->load('images');
         return new ApiResponseResources(true, 'Activity packages retrieved successfully', $packages);
+    }
+
+    public function adminIndex()
+    {
+        // $packages = RentalPackage::where('is_available', true)->paginate(2);
+        // $packages->load('images');
+        $packages = ActivityPackage::all();
+        return new ApiResponseResources(true, 'Rental packages retrieved successfully', $packages);
     }
 
      /**
@@ -65,6 +74,9 @@ class ActivityPackageController extends Controller
             'name.required' => 'Name is required',
             'name.max' => 'Name may not be greater than 255 characters!',
             'description.required' => 'Fill the description here',
+            'itinerary.required' => 'Itinerary is required',
+            'includes.required' => 'Includes is required',
+            'excludes.required'=> 'Excludes is required',
             'price_per_person.required' => 'Price is required',
             'price_per_person.numeric' => 'The price must be entered as a number',
             'min_persons.required' => 'Minimum number of people is required',
@@ -81,6 +93,9 @@ class ActivityPackageController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|max:255',
             'description' => 'required',
+            'itinerary' => 'required',
+            'includes' => 'required',
+            'excludes' => 'required',
             'price_per_person' => 'required|numeric',
             'min_persons' => 'required|numeric',
             'duration_hours' => 'required|numeric',
@@ -95,6 +110,9 @@ class ActivityPackageController extends Controller
         $activityPackage = ActivityPackage::create([
             'name' => $request->name,
             'description' => $request->description,
+            'itinerary' => $request->itinerary,
+            'includes' => $request->includes,
+            'excludes' => $request->excludes,
             'price_per_person' => $request->price_per_person,
             'min_persons' => $request->min_persons,
             'duration_hours' => $request->duration_hours,
@@ -154,6 +172,9 @@ class ActivityPackageController extends Controller
             'name.required' => 'Name is required',
             'name.max' => 'Name may not be greater than 255 characters!',
             'description.required' => 'Fill the description here',
+            'itinerary.required' => 'Itinerary is required',
+            'includes.required' => 'Includes is required',
+            'excludes.required'=> 'Excludes is required',
             'price_per_person.required' => 'Price is required',
             'price_per_person.numeric' => 'The price must be entered as a number',
             'min_persons.required' => 'Minimum number of people is required',
@@ -170,6 +191,9 @@ class ActivityPackageController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|max:255',
             'description' => 'required',
+            'itinerary' => 'required',
+            'includes' => 'required',
+            'excludes' => 'required',
             'price_per_person' => 'required|numeric',
             'min_persons' => 'required|numeric',
             'duration_hours' => 'required|numeric',
@@ -184,6 +208,9 @@ class ActivityPackageController extends Controller
         $activityPackage->update([
             'name' => $request->name,
             'description' => $request->description,
+            'itinerary' => $request->itinerary,
+            'includes' => $request->includes,
+            'excludes' => $request->excludes,
             'price_per_person' => $request->price_per_person,
             'min_persons' => $request->min_persons,
             'duration_hours' => $request->duration_hours,

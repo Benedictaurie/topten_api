@@ -25,8 +25,17 @@ class RentalPackageController extends Controller
      */
     public function index()
     {
-        $packages = RentalPackage::where('is_available', true)->paginate(2);
-        $packages->load('images');
+        // $packages = RentalPackage::where('is_available', true)->paginate(2);
+        // $packages->load('images');
+        $packages = RentalPackage::all();
+        return new ApiResponseResources(true, 'Rental packages retrieved successfully', $packages);
+    }
+
+    public function adminIndex()
+    {
+        // $packages = RentalPackage::where('is_available', true)->paginate(2);
+        // $packages->load('images');
+        $packages = RentalPackage::all();
         return new ApiResponseResources(true, 'Rental packages retrieved successfully', $packages);
     }
 
@@ -80,6 +89,8 @@ class RentalPackageController extends Controller
             'model.required' => 'Model name is required, example: Mio Z',
             'plate_number.required' => 'Plate number is required',
             'description.required' => 'Fill the description here',
+            'includes.required' => 'Includes is required',
+            'excludes.required'=> 'Excludes is required',
             'price_per_day.required' => 'Price per day is required',
             'price_per_day.numeric' => 'The price must be entered as a number',
             'image.array' => 'The image field must be an array.',
@@ -95,6 +106,8 @@ class RentalPackageController extends Controller
             'model' => 'required|string|max:50',
             'plate_number' => 'required|string|max:50|unique:rental_packages,plate_number',
             'description' => 'required',
+            'includes' => 'required',
+            'excludes' => 'required',
             'price_per_day' => 'required|numeric',
             'image' => 'nullable|array|max:6',
             'image.*' => 'image|mimes:jpeg,png,jpg,gif,svg|max:2048',
@@ -110,6 +123,8 @@ class RentalPackageController extends Controller
             'model' => $request->model,
             'plate_number' => $request->plate_number,
             'description' => $request->description,
+            'includes' => $request->includes,
+            'excludes' => $request->excludes,
             'price_per_day' => $request->price_per_day,
             'is_available' => $request->is_available ?? true
         ]);
@@ -160,6 +175,8 @@ class RentalPackageController extends Controller
             'model.required' => 'Model name is required, example: Mio Z',
             'plate_number.required' => 'Plate number is required',
             'description.required' => 'Fill the description here',
+            'includes.required' => 'Includes is required',
+            'excludes.required'=> 'Excludes is required',
             'price_per_day.required' => 'Price per day is required',
             'price_per_day.numeric' => 'The price must be entered as a number',
             'image.array' => 'The image field must be an array.',
@@ -175,6 +192,8 @@ class RentalPackageController extends Controller
             'model' => 'required|string|max:50',
             'plate_number' => 'required|string|max:50|unique:rental_packages,plate_number,' . $id,
             'description' => 'required',
+            'includes' => 'required',
+            'excludes' => 'required',
             'price_per_day' => 'required|numeric',
             'image' => 'nullable|array|max:6',
             'image.*' => 'image|mimes:jpeg,png,jpg,gif,svg|max:2048',
@@ -190,6 +209,8 @@ class RentalPackageController extends Controller
             'model' => $request->model,
             'plate_number' => $request->plate_number,
             'description' => $request->description,
+            'includes' => $request->includes,
+            'excludes' => $request->excludes,
             'price_per_day' => $request->price_per_day,
             'is_available' => $request->is_available ?? true
         ]);

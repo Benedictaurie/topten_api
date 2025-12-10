@@ -57,12 +57,6 @@ class User extends Authenticatable implements CanResetPasswordContract
         'password' => 'hashed',
     ];
 
-    //Relasi satu user hanya bisa punya punya satu driver record (untuk akun role = driver)
-    public function driver()
-    {
-        return $this->hasOne(Driver::class);
-    }
-
     //Relasi satu user bisa punya banyak booking
     public function bookings()
     {
@@ -77,10 +71,5 @@ class User extends Authenticatable implements CanResetPasswordContract
     public function reviews()
     {
         return $this->hasMany(Review::class);
-    }
-    //satu user mmempunyai banyak rewards
-    public function rewards()
-    {
-        return $this->hasMany(Reward::class);
     }
 }

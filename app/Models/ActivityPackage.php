@@ -12,6 +12,9 @@ class ActivityPackage extends Model
     protected $fillable  = [
         'name',
         'description',
+        'itinerary',
+        'includes',
+        'excludes',
         'price_per_person',
         'min_persons',
         'duration_hours',

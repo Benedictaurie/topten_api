@@ -7,9 +7,6 @@ use App\Models\ActivityPackage;
 use App\Models\RentalPackage;
 use App\Models\Booking;
 use App\Models\User;
-use App\Models\PaymentTransaction;
-use App\Models\BookingLog;
-use App\Http\Controllers\PaymentController;
 use App\Notifications\NewBookingNotification; 
 use App\Services\Notification\FirebaseNotificationService;
 use Illuminate\Http\Request;
@@ -17,8 +14,6 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Auth; 
 use Illuminate\Support\Facades\Validator;
 use App\Http\Resources\ApiResponseResources;
-use App\Models\BookingReward;
-use App\Models\Reward;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon; // Tambahkan ini untuk manipulasi tanggal
 use Illuminate\Support\Facades\Log;
@@ -94,33 +89,6 @@ class BookingController extends Controller
                 $unitPrice = $package->price_per_person ?? $package->price_per_day;
                 $totalPrice = $unitPrice * $validated['quantity'];
 
-                // --- LOGIKA REWARD ---
-                $rewardTotalApplied = 0;
-                $validRewardsToApply = collect();
-
-                if (!empty($validated['reward_ids'])) {
-                    $validRewardsToApply = Reward::where('user_id', $user->id)
-                        ->whereIn('id', $validated['reward_ids'])
-                        ->where('status', 'available')
-                        ->where(function ($query) {
-                            $query->whereNull('expired_at')->orWhere('expired_at', '>', now());
-                        })
-                        ->where(function ($query) use ($validated) {
-                            $query->where('applies_to', 'all')->orWhere('applies_to', $validated['package_type']);
-                        })
-                        ->get();
-
-                    // Filter reward yang memenuhi minimum transaksi
-                    $applicableRewards = $validRewardsToApply->filter(function ($reward) use ($totalPrice) {
-                        return is_null($reward->min_transaction) || $totalPrice >= $reward->min_transaction;
-                    });
-
-                    $rewardTotalApplied = $applicableRewards->sum('amount');
-                    $validRewardsToApply = $applicableRewards;
-                }
-
-                $finalPrice = max(0, $totalPrice - $rewardTotalApplied);
-
                 // --- LOGIKA END DATE ---
                 $startDate = Carbon::parse($validated['start_date']);
                 $endDate = null;
@@ -141,40 +109,14 @@ class BookingController extends Controller
                     'end_date' => $endDate, 
                     'unit_price_at_booking' => $unitPrice,
                     'total_price' => $totalPrice,
-                    'reward_total_applied' => $rewardTotalApplied,
-                    'final_price' => $finalPrice,
                     'notes' => $validated['notes'],
                     'status' => 'pending',
                 ]);
 
-                // --- SIMPAN KE PIVOT TABLE booking_rewards ---
-                if ($validRewardsToApply->isNotEmpty()) {
-                    $pivotData = $validRewardsToApply->map(function ($reward) use ($booking) {
-                        return [
-                            'booking_id' => $booking->id,
-                            'reward_id' => $reward->id,
-                            'applied_amount' => $reward->amount,
-                            'created_at' => now(),
-                            'updated_at' => now(),
-                        ];
-                    })->toArray();
-                    
-                    BookingReward::insert($pivotData);
-                }
-
-                // --- BUAT BOOKING LOG AWAL ---
-                BookingLog::create([
-                    'booking_id' => $booking->id,
-                    'user_id' => $user->id, // User yang membuat booking
-                    'old_status' => null,
-                    'new_status' => 'pending',
-                    'notes' => 'Booking created successfully.',
-                ]);
-
-                // --- KIRIM NOTIFIKASI KE OWNER DAN ADMIN ---
-                $adminsAndOwners = User::whereIn('role', ['owner', 'admin'])->get(); 
-                if ($adminsAndOwners->isNotEmpty()) {
-                    foreach ($adminsAndOwners as $admin) {
+                // --- KIRIM NOTIFIKASI KE ADMIN ---
+                $admins = User::whereIn('role', ['admin'])->get(); 
+                if ($admins->isNotEmpty()) {
+                    foreach ($admins as $admin) {
                         $admin->notify(new NewBookingNotification($booking));
                         if ($admin->fcm_token) {
                             $firebaseService = app(FirebaseNotificationService::class);
@@ -224,14 +166,6 @@ class BookingController extends Controller
 
             $booking->update(['status' => 'cancelled']);
 
-            // Log the cancellation
-            BookingLog::create([
-                'booking_id' => $booking->id,
-                'user_id' => $user->id,
-                'old_status' => 'pending',
-                'new_status' => 'cancelled',
-                'notes' => 'Booking cancelled by user',
-            ]);
 
             return new ApiResponseResources(true, 'Booking cancelled successfully', $booking);
 
@@ -272,12 +206,12 @@ class BookingController extends Controller
             return new ApiResponseResources(false, 'Booking not found.', null, 404);
         }
 
-        // 2. Otorisasi: Pastikan hanya user pembuat booking atau admin/owner yang bisa melihatnya.
-        // Asumsi: Jika role user adalah 'admin' atau 'owner', mereka bisa melihat semua booking.
+        // 2. Otorisasi: Pastikan hanya user pembuat booking atau admin yang bisa melihatnya.
+        // Asumsi: Jika role user adalah 'admin', mereka bisa melihat semua booking.
         $user = Auth::user();
         $isAuthorized = $user && (
             $booking->user_id === $user->id || 
-            in_array($user->role, ['admin', 'owner'])
+            in_array($user->role, ['admin'])
         );
 
         if (!$isAuthorized) {

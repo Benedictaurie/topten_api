@@ -6,7 +6,6 @@ use Illuminate\Http\Request;
 use App\Models\User;
 use App\Models\Review;
 use App\Models\Booking;
-use App\Models\PaymentTransaction;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Auth;
 use App\Http\Resources\ApiResponseResources;
@@ -18,10 +17,6 @@ class ReviewController extends Controller
      * Get featured reviews for homepage slider
      * Menampilkan maksimal 12 customer yang sudah melakukan touring dan menulis review
      */
-    /**
- * Get featured reviews for homepage slider
- * Menampilkan maksimal 12 customer yang sudah melakukan touring dan menulis review
- */
     public function index(Request $request)
     {
         try {

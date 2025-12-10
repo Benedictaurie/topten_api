@@ -15,12 +15,10 @@ return new class extends Migration
             $table->id();
             $table->foreignId('booking_id')->constrained('bookings')->cascadeOnDelete();
             $table->string('type', 50); // Tipe peristiwa: Payment, Refund, Fee, Adjustment
-            $table->decimal('amount', 10, 2);
+            $table->integer('amount');
             $table->string('method', 50)->nullable();
             $table->enum('status', ['success', 'pending', 'failed', 'refunded', 'canceled'])->default('pending');
-            $table->string('gateway_reference', 100)->nullable()->index(); // ID referensi dari Payment Gateway (e.g., Midtrans Transaction ID)
             $table->text('proof_of_payment')->nullable(); // Bukti pembayaran manual (jika ada)
-            $table->text('raw_response')->nullable(); // Simpan JSON response Midtrans untuk debugging
             $table->text('notes')->nullable();
             $table->timestamp('confirmed_at')->nullable(); //konfirmasi hanya dilakukan jika pembayaran berhasil dan valid. jika tidak ada pembayaran (cancel/unpaid), kolom dibiarkan kosong
             $table->foreignId('confirmed_by')->nullable()->constrained('users')->nullOnDelete(); //karena kalau tidak ada konfirmasi, tidak ada admin yang perlu dicatat

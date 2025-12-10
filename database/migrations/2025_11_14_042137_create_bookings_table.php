@@ -19,10 +19,8 @@ return new class extends Migration
             $table->dateTime('start_date');
             $table->dateTime('end_date')->nullable(); // Nullable untuk rental/activity yang tidak punya 'end date' pasti
             $table->integer('quantity')->default(1); // Jumlah orang, jumlah hari rental, dll
-            $table->decimal('unit_price_at_booking', 10, 2); // Simpan harga per unit SAAT PEMESANAN
-            $table->decimal('total_price', 10, 2); // harga sebelum reward
-            $table->decimal('reward_total_applied', 10, 2)->default(0); 
-            $table->decimal('final_price', 10, 2); // total_price - reward_total_applied
+            $table->integer('unit_price_at_booking'); // Simpan harga per unit SAAT PEMESANAN
+            $table->integer('total_price'); 
             $table->text('notes')->nullable();
             $table->enum('status', ['pending', 'confirmed', 'completed', 'cancelled', 'no_show', 'rescheduled'])->default('pending'); //no_show = User tidak muncul pada waktu booking tanpa pembatalan.
             $table->timestamps();

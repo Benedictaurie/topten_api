@@ -25,8 +25,6 @@ class Booking extends Model
         'quantity',
         'unit_price_at_booking',
         'total_price',
-        'reward_total_applied',
-        'final_price',
         'notes',
         'status',
     ];
@@ -64,34 +62,5 @@ class Booking extends Model
     public function review()
     {
         return $this->hasOne(Review::class);
-    }
-
-    /**
-     * A Booking has many status logs.
-     */
-    public function statusLogs()
-    {
-        // Menggunakan Model BookingLog yang baru dibuat
-        return $this->hasMany(BookingLog::class); 
-    }
-
-    /**
-     * A Booking has many payment transactions.
-     */
-    public function transactions()
-    {
-        // Menggunakan Model PaymentTransaction yang baru dibuat
-        return $this->hasMany(PaymentTransaction::class);
-    }
-    
-    /**
-     * Satu booking bisa menggunakan beberapa reward, dan satu reward bisa digunakan pada beberapa booking 
-     * (jika sistem memperbolehkan reward dipakai lebih dari satu kali — bisa juga tidak).
-     */
-    public function rewards()
-    {
-        return $this->belongsToMany(Reward::class, 'booking_rewards')
-            ->withPivot('applied_amount')
-            ->withTimestamps();
     }
 }

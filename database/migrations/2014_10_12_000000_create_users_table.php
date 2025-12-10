@@ -17,12 +17,12 @@ return new class extends Migration
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
-            $table->enum('role', ['adminWeb', 'customer', 'owner', 'driver'])->default('customer');
+            $table->enum('role', ['user', 'admin'])->default('user');
             $table->string('phone_number', 25)->nullable();
-            $table->timestamp('phone_number_verified_at')->nullable(); //kapan dilakukannya verifikasi phone number
+            $table->timestamp('phone_number_verified_at')->nullable(); 
             $table->text('address')->nullable();
             $table->string('profile_picture')->nullable();
-            $table->text('fcm_token')->nullable(); //untuk user owner
+            $table->text('fcm_token')->nullable(); 
             $table->rememberToken();
             $table->timestamps();
         });

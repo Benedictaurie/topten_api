@@ -6,7 +6,6 @@ use Illuminate\Http\Request;
 use App\Http\Resources\ApiResponseResources;
 use Illuminate\Support\Facades\Validator;
 use App\Models\User;
-use App\Models\Reward;
 use App\Services\Otp\OtpService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Mail;
@@ -61,7 +60,7 @@ class AuthController extends Controller
                 'email' => $request->email,
                 'password' => Hash::make($request->password),
                 'phone_number' => $request->phone_number,
-                'role' => 'customer', // Default role
+                'role' => 'user', // Default role
             ]);
 
             // Generate OTP
@@ -103,7 +102,6 @@ class AuthController extends Controller
 
     public function verifyEmail(Request $request)
     {
-        // 1. Input Validation (Adopting Your friend's OTP structure)
         $messages = [
             'email.required' => 'Email is required',
             'email.email' => 'Invalid email format',
@@ -148,14 +146,11 @@ class AuthController extends Controller
                 return new ApiResponseResources(false, 'Incorrect or Expired OTP Code!', null, 422);
             }
 
-            //Update verification status & beri reward
+            //Update verification status 
             DB::beginTransaction();
 
             $user->email_verified_at = now();
             $user->save();
-
-            // Create welcome reward
-            $reward = $this->createWelcomeReward($user);
 
             DB::commit();
 
@@ -165,15 +160,11 @@ class AuthController extends Controller
             $accessToken = $user->createToken('access_token', ['*'], now()->addDays(7))->plainTextToken;
 
             $message = 'Email verification successful!';
-            if ($reward) {
-                $message .= ' Welcome reward has been added to your account.';
-            }
 
             return new ApiResponseResources(true, $message, [
                 'user' => $user->makeHidden(['password', 'remember_token']),
                 'access_token' => $accessToken, // Kirim FULL ACCESS token
                 'email_verified' => true,
-                'reward' => $reward
             ]);
 
         } catch (\Exception $e) {
@@ -245,32 +236,6 @@ class AuthController extends Controller
         }
     }
 
-
-    /**
-     * Create welcome reward for verified user
-     */
-    private function createWelcomeReward(User $user)
-    {
-        try {
-            $reward = Reward::create([
-                'user_id' => $user->id,
-                'origin' => 'welcome',
-                'amount' => 50000, // Adjust amount as needed
-                'type' => 'promo',
-                'status' => 'available',
-                'description' => 'Welcome Promo for new verified user',
-                'applies_to' => 'all',
-                'min_transaction' => 100000, // Minimum transaction amount
-                'promo_code' => 'WELCOME' . strtoupper(Str::random(6)),
-                'expired_at' => now()->addDays(14), // Expires in 14 days
-            ]);
-
-            return $reward;
-        } catch (\Exception $e) {
-            Log::error('Failed to create welcome reward: ' . $e->getMessage());
-            return null;
-        }
-    }
 
     public function login(Request $request)
     {

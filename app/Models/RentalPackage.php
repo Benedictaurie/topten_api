@@ -15,6 +15,8 @@ class RentalPackage extends Model
         'model',
         'plate_number',
         'description',
+        'includes',
+        'excludes',
         'price_per_day',
         'is_available',
     ];

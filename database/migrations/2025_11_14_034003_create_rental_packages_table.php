@@ -19,7 +19,9 @@ return new class extends Migration
             $table->string('model', 50);
             $table->string('plate_number', 50)->unique();
             $table->text('description');
-            $table->decimal('price_per_day', 10, 2);
+            $table->text('includes');
+            $table->text('excludes');
+            $table->integer('price_per_day');
             $table->boolean('is_available')->default(true);
             $table->timestamps();
         });
